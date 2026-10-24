@@ -36,7 +36,7 @@ export function Reports({ s, d }: { s: TeamState; d: D }) {
         <b>📨 Incident Reports & Cross-check Desk.</b>
         <div>Field reports can be outdated, copied, or false. Use your <b>3 analyst time tokens</b> each round to check reports against official, news, social, or local contacts before marking them or deploying units.</div>
         <div style={{ marginTop: 4, fontWeight: 700, color: s.analystTokens > 0 ? '#1e9e5a' : '#c0392b' }}>
-          ⏱️ Analyst time tokens remaining this round: {s.analystTokens} of 3
+          ⏱️ Investigation points remaining this round: {s.analystTokens} of 3
         </div>
       </div>
 

@@ -2,11 +2,20 @@ import { useEffect, useRef, useState } from 'react';
 import MapCanvas, { HQ, type Move } from './map/MapCanvas';
 import { Analyst, Board, Debrief, Host, Reports, Score, type D } from './panels/Panels';
 import { Glossary, Legend, Tutorial, coachText } from './panels/Help';
+import { LandingPage, JoinPage, HostPage, HostLeaderboard } from './panels/MainMenu';
+import {
+  type ServerRoom,
+  saveRoom,
+  getRoom,
+  broadcast,
+  subscribeToSync,
+} from './multiplayer/roomSync';
 import { B, COST, RT, DEPOT_FUEL, DEPOT_FOOD, RESUPPLY_FUEL, RESUPPLY_FOOD } from '../shared/scenario';
 import { apply, flooded, newTeamState } from '../shared/sim';
 import { total } from '../shared/scoring';
 import type { Action, Actor, TeamState } from '../shared/types';
 import './styles.css';
+import './menu.css';
 
 const TEAM = 'team-1', KEY = 'cr_react_v3', SEEN = 'cr_seen', SPD = { boat: 110, amb: 150, drone: 210 };
 const TABS: [string, string][] = [
@@ -16,6 +25,8 @@ const TABS: [string, string][] = [
   ['brd', '🏆 Board'],
   ['host', '🎓 Host'],
 ];
+
+type ViewMode = 'menu' | 'join' | 'host' | 'player_game' | 'host_leaderboard';
 
 const load = (): TeamState => {
   try {
@@ -29,6 +40,10 @@ const load = (): TeamState => {
 };
 
 export default function App() {
+  const [viewMode, setViewMode] = useState<ViewMode>('menu');
+  const [currentRoom, setCurrentRoom] = useState<ServerRoom | null>(null);
+  const [myTeam, setMyTeam] = useState<{ id: string; name: string } | null>(null);
+
   const [s, setS] = useState(load);
   const [tab, setTab] = useState('rep');
   const [sel, setSel] = useState<string | null>(null);
@@ -46,8 +61,38 @@ export default function App() {
 
   const say = (m: string) => { setMsg(m); setTimeout(() => setMsg(''), 4500); };
 
+  const resetGame = (teamId = TEAM, roundDuration = 120) => {
+    const fresh = newTeamState(teamId);
+    fresh.round = 1;
+    fresh.finished = false;
+    fresh.analystTokens = 3; // Investigation points 3/3
+    fresh.droneFlights = 3;
+    fresh.saved = 0;
+    fresh.units.forEach(u => { u.st = 'idle'; });
+    moves.current = [];
+    sr.current = fresh;
+    setS(fresh);
+    setT(roundDuration);
+    setPaused(false);
+    setSel(null);
+    setPend(null);
+    setUnit(null);
+    try {
+      localStorage.setItem(KEY, JSON.stringify(fresh));
+    } catch { /* ignore */ }
+    return fresh;
+  };
+
   const run = (a: Record<string, unknown>, who: Actor): boolean => {
-    const r = apply(sr.current, { id: crypto.randomUUID(), teamId: TEAM, ...a } as Action, who);
+    const currentTeamId = sr.current.teamId;
+    const actionTeamId = (a.teamId as string) || currentTeamId;
+    const actor: Actor =
+      who.role === 'host'
+        ? { role: 'host' }
+        : who.role === 'system'
+        ? { role: 'system' }
+        : { role: 'team', teamId: currentTeamId };
+    const r = apply(sr.current, { id: crypto.randomUUID(), teamId: actionTeamId, ...a } as Action, actor);
     if (!r.ok) {
       say(r.error);
       return false;
@@ -78,7 +123,8 @@ export default function App() {
   };
 
   const d: D = (a, w = 'team') => {
-    const ok = run(a, w === 'host' ? { role: 'host' } : { role: 'team', teamId: TEAM });
+    const currentTeamId = sr.current.teamId;
+    const ok = run(a, w === 'host' ? { role: 'host' } : { role: 'team', teamId: currentTeamId });
     if (ok) {
       if (a.type === 'advance') setT(120);
       if (a.type === 'approve') launch();
@@ -99,24 +145,85 @@ export default function App() {
       if (sr.current.round >= 5) {
         return say('Scout drone grounded in Round 5 due to storm blackout!');
       }
-      if (run({ type: 'deploy', unit: id, b }, { role: 'team', teamId: TEAM })) launch();
+      if (run({ type: 'deploy', unit: id, b }, { role: 'team', teamId: sr.current.teamId })) launch();
     } else {
       setPend({ unit: id, b });
     }
     setUnit(null);
   };
 
+  // Broadcast player score changes to room sync
   useEffect(() => {
+    if (viewMode === 'player_game' && currentRoom && myTeam) {
+      const score = total(s);
+      const room = getRoom(currentRoom.code) || currentRoom;
+      const idx = room.teams.findIndex(t => t.id === myTeam.id);
+      const updatedTeam = {
+        ...(idx >= 0 ? room.teams[idx] : myTeam),
+        score: score.all,
+        opsScore: score.ops,
+        aiScore: score.ai,
+        savedCount: s.saved,
+        wasteCount: s.st.waste,
+        reportsChecked: s.st.vOK + s.st.caught,
+        status: s.finished ? ('finished' as const) : ('in_mission' as const),
+        joinedAt: idx >= 0 ? room.teams[idx].joinedAt : Date.now(),
+      };
+      if (idx >= 0) room.teams[idx] = updatedTeam;
+      else room.teams.push(updatedTeam);
+      saveRoom(room);
+      broadcast({
+        type: 'SCORE_UPDATE',
+        roomCode: currentRoom.code,
+        teamId: myTeam.id,
+        score: score.all,
+        opsScore: score.ops,
+        aiScore: score.ai,
+        savedCount: s.saved,
+        wasteCount: s.st.waste,
+        reportsChecked: s.st.vOK + s.st.caught,
+      });
+      broadcast({ type: 'ROOM_UPDATE', room });
+    }
+  }, [s, viewMode, currentRoom, myTeam]);
+
+  // Listen for host remote actions in player_game
+  useEffect(() => {
+    if (viewMode === 'player_game' && currentRoom) {
+      const unsub = subscribeToSync(msg => {
+        if (msg.type === 'RESET_GAME' && currentRoom && msg.roomCode.toUpperCase() === currentRoom.code.toUpperCase()) {
+          resetGame(myTeam?.id || TEAM, currentRoom.roundTime || 120);
+        } else if (msg.type === 'HOST_ACTION' && msg.roomCode.toUpperCase() === currentRoom.code.toUpperCase()) {
+          if (msg.action === 'advance') {
+            run({ type: 'advance' }, { role: 'host' });
+            setT(currentRoom.roundTime || 120);
+          } else if (msg.action === 'pause') {
+            setPaused(true);
+          } else if (msg.action === 'resume') {
+            setPaused(false);
+          } else if (msg.action === 'inject' && msg.payload) {
+            run({ type: 'inject', k: msg.payload }, { role: 'host' });
+          }
+        } else if (msg.type === 'ROOM_CLOSED' && msg.roomCode.toUpperCase() === currentRoom.code.toUpperCase()) {
+          say('Server room closed by host.');
+        }
+      });
+      return () => unsub();
+    }
+  }, [viewMode, currentRoom, myTeam]);
+
+  useEffect(() => {
+    if (viewMode !== 'player_game') return;
     const i = setInterval(() => {
       if (!paused && !sr.current.finished && !tut) setT(v => v - 1);
     }, 1000);
     return () => clearInterval(i);
-  }, [paused, tut]);
+  }, [viewMode, paused, tut]);
 
   useEffect(() => {
-    if (t <= 0 && !s.finished) {
+    if (viewMode === 'player_game' && t <= 0 && !s.finished) {
       run({ type: 'advance' }, { role: 'host' });
-      setT(120);
+      setT(currentRoom?.roundTime || 120);
     }
   });
 
@@ -129,10 +236,126 @@ export default function App() {
     drone: ['🛰️', 'Scout Drone', `Reveals one town · uses 8 fuel · ${s.droneFlights}/3 flights left${s.round >= 5 ? ' (Grounded)' : ''}`],
   };
 
+  if (viewMode === 'menu') {
+    return (
+      <LandingPage
+        onJoinClick={() => setViewMode('join')}
+        onHostClick={() => {
+          resetGame(TEAM);
+          setViewMode('host');
+        }}
+      />
+    );
+  }
+
+  if (viewMode === 'join') {
+    return (
+      <JoinPage
+        onBack={() => setViewMode('menu')}
+        onGameStart={(room, teamId, name) => {
+          resetGame(teamId, room.roundTime || 120);
+          setCurrentRoom(room);
+          setMyTeam({ id: teamId, name });
+          setViewMode('player_game');
+        }}
+      />
+    );
+  }
+
+  if (viewMode === 'host') {
+    return (
+      <HostPage
+        onBack={() => setViewMode('menu')}
+        onStartGame={room => {
+          resetGame(TEAM, room.roundTime || 120);
+          setCurrentRoom(room);
+          setViewMode('host_leaderboard');
+        }}
+      />
+    );
+  }
+
+  if (viewMode === 'host_leaderboard' && currentRoom) {
+    return (
+      <HostLeaderboard
+        room={currentRoom}
+        onAdvanceRound={() => {
+          const fresh = getRoom(currentRoom.code) || currentRoom;
+          const updated: ServerRoom = {
+            ...fresh,
+            currentRound: Math.min(5, fresh.currentRound + 1),
+            timeRemaining: fresh.roundTime,
+            logs: [
+              {
+                time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                text: `Host advanced exercise to Round ${Math.min(5, fresh.currentRound + 1)}: ${RT[Math.min(4, fresh.currentRound)]}.`,
+              },
+              ...fresh.logs,
+            ],
+          };
+          saveRoom(updated);
+          setCurrentRoom(updated);
+          broadcast({ type: 'HOST_ACTION', roomCode: currentRoom.code, action: 'advance' });
+          broadcast({ type: 'ROOM_UPDATE', room: updated });
+        }}
+        onTogglePause={() => {
+          const fresh = getRoom(currentRoom.code) || currentRoom;
+          const updated: ServerRoom = {
+            ...fresh,
+            isPaused: !fresh.isPaused,
+            logs: [
+              {
+                time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                text: fresh.isPaused ? 'Timer resumed by host.' : 'Timer paused by host.',
+              },
+              ...fresh.logs,
+            ],
+          };
+          saveRoom(updated);
+          setCurrentRoom(updated);
+          broadcast({ type: 'HOST_ACTION', roomCode: currentRoom.code, action: updated.isPaused ? 'pause' : 'resume' });
+          broadcast({ type: 'ROOM_UPDATE', room: updated });
+        }}
+        onInject={k => {
+          const desc = k === 's' ? 'Storm surge hits Dalig early' : k === 'r' ? 'Viral unverified social media rumor injected' : 'Simulated AI uplink outage';
+          const fresh = getRoom(currentRoom.code) || currentRoom;
+          const updated: ServerRoom = {
+            ...fresh,
+            logs: [
+              {
+                time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                text: `⚡ Host triggered crisis inject: ${desc}`,
+              },
+              ...fresh.logs,
+            ],
+          };
+          saveRoom(updated);
+          setCurrentRoom(updated);
+          broadcast({ type: 'HOST_ACTION', roomCode: currentRoom.code, action: 'inject', payload: k });
+          broadcast({ type: 'ROOM_UPDATE', room: updated });
+        }}
+        onExit={() => setViewMode('menu')}
+      />
+    );
+  }
+
   return (
     <div className="app">
       <header className="top">
+        <button
+          className="btn"
+          style={{ background: '#1e293b', color: '#f8fafc', borderColor: '#475569', fontWeight: 700 }}
+          onClick={() => setViewMode('menu')}
+          title="Return to Main Menu"
+        >
+          🚪 Menu
+        </button>
         <span className="logo">AI: CODE RED</span>
+        {currentRoom && (
+          <span className="stat highlight" title="Connected Server Room & Team Call Sign">
+            📡 {currentRoom.code} {myTeam ? `· ${myTeam.name}` : ''}
+          </span>
+        )}
         <span className="rounds" title="Round progression (5 rounds total)">
           {[1, 2, 3, 4, 5].map(n => (
             <span key={n} className={'dot ' + (n === s.round ? 'on' : n < s.round || s.finished ? 'done' : '')}>
@@ -156,8 +379,8 @@ export default function App() {
         <span className="stat highlight" title="Scout drone is strictly limited to 3 flights per game and grounded in Round 5.">
           🛰️ Flights {s.droneFlights}/3
         </span>
-        <span className="stat highlight" title="Analyst time tokens for the Cross-check Desk in Reports tab. 3 per round; unused tokens do not carry over.">
-          🔍 Desk {s.analystTokens}/3
+        <span className="stat highlight" title="Investigation points for the Cross-check Desk in Reports tab. 3 per round; unused tokens do not carry over.">
+          🔍 Investigation {s.analystTokens}/3
         </span>
         <span className="stat" title="Total residents safely evacuated to shelters.">
           🙂 Saved {s.saved}
@@ -219,7 +442,7 @@ export default function App() {
                 <button
                   className="btn ok"
                   onClick={() => {
-                    if (run({ type: 'deploy', unit: pend.unit, b: pend.b }, { role: 'team', teamId: TEAM })) launch();
+                    if (run({ type: 'deploy', unit: pend.unit, b: pend.b }, { role: 'team', teamId: sr.current.teamId })) launch();
                     setPend(null);
                   }}
                 >
