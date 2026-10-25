@@ -23,8 +23,8 @@ describe('scoring', () => {
 
 describe('resources and rescue', () => {
   it('deploys deduct resources and a verified flooded target scores lives and verification', () => {
-    let s = newTeamState('t1'); s = go(s, 'D1', 'A'); expect(s.res.fuel).toBe(112);
-    s = go(s, 'B1', 'A'); expect(s.res.fuel).toBe(100); expect(s.res.food).toBe(70); expect(s.saved).toBe(40); expect(s.pop.A).toBe(100);
+    let s = newTeamState('t1'); s = go(s, 'D1', 'A'); expect(s.res.fuel).toBe(154);
+    s = go(s, 'B1', 'A'); expect(s.res.fuel).toBe(144); expect(s.res.food).toBe(94); expect(s.saved).toBe(40); expect(s.pop.A).toBe(100);
     expect(pts(s, 'lives')).toBeCloseTo(30 * 40 / 720, 1); expect(pts(s, 'ver')).toBe(4);
   });
   it('rejects insufficient resources and blocked roads', () => {
@@ -32,7 +32,7 @@ describe('resources and rescue', () => {
     s = nxt(newTeamState('t1'), 2); const r = apply(s, { id: 'z2', teamId: 't1', type: 'deploy', unit: 'M1', b: 'C' }, T(s)); expect(r.ok).toBe(false);
   });
   it('false alarm on an unverified claim costs resources and verification once', () => {
-    let s = go(newTeamState('t1'), 'B1', 'E'); expect(pts(s, 'res')).toBe(-3); expect(pts(s, 'ver')).toBe(-8); expect(s.st.waste).toBe(12);
+    let s = go(newTeamState('t1'), 'B1', 'E'); expect(pts(s, 'res')).toBe(-3); expect(pts(s, 'ver')).toBe(-8); expect(s.st.waste).toBe(10);
   });
   it('same false alarm after recon is not double-penalised on verification', () => {
     let s = go(newTeamState('t1'), 'D1', 'E'); s = go(s, 'B1', 'E'); expect(pts(s, 'ver')).toBe(0); expect(pts(s, 'res')).toBe(-3);

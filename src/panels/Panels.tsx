@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { B, R0, DEPOT_FUEL, DEPOT_FOOD, RESUPPLY_FUEL, RESUPPLY_FOOD } from '../../shared/scenario';
+import { B, EV, R0, DEPOT_FUEL, DEPOT_FOOD, RESUPPLY_FUEL, RESUPPLY_FOOD, HOSPITAL_CAP, RELOCATE_COST, RELOCATE_MAX } from '../../shared/scenario';
 import { CAPS, CN, cats, total } from '../../shared/scoring';
 import { reports } from '../../shared/sim';
 import { board } from '../../shared/demoBoard';
@@ -290,6 +290,13 @@ export function Board({ s, t }: { s: TeamState; t: number }) {
   );
 }
 
+export function Shelters({ s, d }: { s: TeamState; d: D }) {
+  const bar = (used: number, cap: number) => <div className="meter"><i style={{ width: Math.min(100, 100 * used / cap) + '%', background: used >= cap ? '#c0392b' : '#3b82f6' }} /></div>;
+  return <div className="intro"><b>🏠 Shelters</b> <span className="hint">Rescued people need a place to stay. A full center cannot take more people: move some to the provincial shelter (costs {RELOCATE_COST.fuel} fuel + {RELOCATE_COST.food} food, up to {RELOCATE_MAX} people, once per center per round).</span>
+    {EV.map(e => { const u = s.ev[e.id] ?? 0; return <div key={e.id} style={{ marginTop: 6 }}>{e.n}: <b>{u}/{e.cap}</b>{u >= e.cap && <b style={{ color: '#c0392b' }}> FULL</b>}{bar(u, e.cap)}<Btn onClick={() => d({ type: 'relocate', center: e.id })}>🚌 Move up to {RELOCATE_MAX} people out</Btn></div>; })}
+    <div style={{ marginTop: 6 }}>🏥 Hospital (ambulances deliver here first): <b>{s.ev.H ?? 0}/{HOSPITAL_CAP}</b> <span className="hint">{HOSPITAL_CAP > 0 && '30 patients go home at each round start.'}</span>{bar(s.ev.H ?? 0, HOSPITAL_CAP)}</div>
+    <div className="hint">Moved to the provincial shelter so far: {s.relocated}</div></div>;
+}
 export function Host({ s, d, paused, setPaused }: { s: TeamState; d: D; paused: boolean; setPaused: (b: boolean) => void }) {
   const [ok, setOk] = useState(false), [code, setCode] = useState('');
   if (!ok) {
@@ -328,7 +335,7 @@ export function Host({ s, d, paused, setPaused }: { s: TeamState; d: D; paused: 
           ? s.supply.emergencyPending
             ? '🚁 Emergency convoy en route for next round.'
             : s.supply.bridgeBlockedAt
-            ? `⚠️ Blocked by broken bridge in round ${s.supply.bridgeBlockedAt}.`
+            ? `✅ Emergency resupply received (one round late: the bridge was out in round ${s.supply.bridgeBlockedAt}).`
             : '✅ Emergency resupply already received.'
           : 'Convoy standing by at headquarters.'}
       </div>

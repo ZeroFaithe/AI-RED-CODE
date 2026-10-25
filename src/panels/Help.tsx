@@ -65,9 +65,9 @@ export function Glossary({ onClose }: { onClose: () => void }) {
 export function Legend() {
   return (
     <div className="legend">
-      <div>🚤 <b>Rescue Boat:</b> carries up to 40 people (12 fuel, 6 food)</div>
-      <div>🚑 <b>Ambulance:</b> carries up to 20 (8 fuel, 1 medic, blocked by broken bridge)</div>
-      <div>🛰️ <b>Scout Drone:</b> reveals one town (8 fuel, max 3 flights, disabled Rd 5)</div>
+      <div>🚤 <b>Rescue Boat:</b> carries up to 40 people (10 fuel, 4 food)</div>
+      <div>🚑 <b>Ambulance:</b> carries up to 20 (6 fuel, 1 medic, delivers to the hospital first, blocked by broken bridge)</div>
+      <div>🛰️ <b>Scout Drone:</b> reveals one town (6 fuel, max 3 flights, disabled Rd 5)</div>
       <div>🔍 <b>Cross-check Desk:</b> 3 tokens/rd to verify claims cheaply</div>
       <div>⬜ <b>Gray shade:</b> unobserved (fog of war)</div>
       <div>🔵 <b>Blue circle:</b> confirmed flooding</div>

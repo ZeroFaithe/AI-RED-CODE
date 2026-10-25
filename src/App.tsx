@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import MapCanvas, { HQ, type Move } from './map/MapCanvas';
-import { Analyst, Board, Debrief, Host, Reports, Score, type D } from './panels/Panels';
+import { Analyst, Board, Debrief, Host, Reports, Score, Shelters, type D } from './panels/Panels';
 import { Glossary, Legend, Tutorial, coachText } from './panels/Help';
 import { LandingPage, JoinPage, HostPage, HostLeaderboard } from './panels/MainMenu';
 import {
@@ -129,7 +129,7 @@ export default function App() {
       if (a.type === 'advance') setT(120);
       if (a.type === 'approve') launch();
       if (a.type === 'resupply') {
-        say('Emergency resupply requested! Arrives at the start of next round (if bridge is open).');
+        say('Emergency resupply requested! Arrives next round (one round later if the bridge is out).');
       }
     }
     return ok;
@@ -231,9 +231,9 @@ export default function App() {
   const closeTut = () => { localStorage.setItem(SEEN, '1'); setTut(false); };
 
   const UI: Record<string, [string, string, string]> = {
-    boat: ['🚤', 'Rescue Boat', 'Carries 40 people · uses 12 fuel + 6 food'],
-    amb: ['🚑', 'Ambulance', 'Carries 20 · uses 8 fuel + 1 medic · no broken bridges'],
-    drone: ['🛰️', 'Scout Drone', `Reveals one town · uses 8 fuel · ${s.droneFlights}/3 flights left${s.round >= 5 ? ' (Grounded)' : ''}`],
+    boat: ['🚤', 'Rescue Boat', 'Carries 40 people · uses 10 fuel + 4 food'],
+    amb: ['🚑', 'Ambulance', 'Carries 20 · uses 6 fuel + 1 medic · goes to the hospital first · no broken bridges'],
+    drone: ['🛰️', 'Scout Drone', `Reveals one town · uses 6 fuel · ${s.droneFlights}/3 flights left${s.round >= 5 ? ' (Grounded)' : ''}`],
   };
 
   if (viewMode === 'menu') {
@@ -401,11 +401,11 @@ export default function App() {
             borderColor: '#b45309',
             fontSize: '12px',
           }}
-          title={`One-time emergency resupply: +${RESUPPLY_FUEL} fuel, +${RESUPPLY_FOOD} food at next round start. Fails if bridge is out!`}
+          title={`One-time emergency resupply: +${RESUPPLY_FUEL} fuel, +${RESUPPLY_FOOD} food at next round start. Arrives one round late if the bridge is out.`}
           disabled={s.supply.emergencyUsed}
           onClick={() => d({ type: 'resupply' })}
         >
-          🚁 Resupply {s.supply.emergencyUsed ? (s.supply.emergencyPending ? '⏳ En Route' : s.supply.bridgeBlockedAt ? '❌ Blocked' : '✅ Received') : 'Request'}
+          🚁 Resupply {s.supply.emergencyUsed ? (s.supply.emergencyPending ? '⏳ En Route' : s.supply.bridgeBlockedAt ? '✅ Received (late)' : '✅ Received') : 'Request'}
         </button>
 
         <button className="btn" onClick={() => setGl(true)}>❓ Guide</button>
@@ -475,7 +475,7 @@ export default function App() {
           </nav>
           <div className="pane">
             {s.finished && <Debrief s={s} />}
-            {tab === 'rep' && <Reports s={s} d={d} />}
+            {tab === 'rep' && <><Shelters s={s} d={d} /><Reports s={s} d={d} /></>}
             {tab === 'ai' && <Analyst s={s} d={d} />}
             {tab === 'sco' && <Score s={s} />}
             {tab === 'brd' && <Board s={s} t={t} />}

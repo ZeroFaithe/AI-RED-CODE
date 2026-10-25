@@ -12,7 +12,7 @@ Requires Node.js 18+ on this machine. No external services or database required.
 # 1. Install dependencies
 npm install
 
-# 2. Run unit and engine test suite (all 27 tests)
+# 2. Run unit and engine test suite (all 48 tests)
 npm test
 
 # 3. Verify TypeScript type safety

@@ -22,7 +22,9 @@ It is a graphical, interactive strategy game—not a quiz or text adventure.
 - **Animated Units**: Drag-and-drop or tap-to-dispatch Rescue Boats, Ambulances, and the Scout Drone with real-time waypoint travel animation.
 
 ### 2. Supply Logistics & Replenishment
+- **Starting supplies and costs (v2)**: you start with 160 fuel, 100 food and 4 medics. A boat trip costs 10 fuel + 4 food, an ambulance trip 6 fuel + 1 medic, a scout flight 6 fuel. Evacuees eat 5% of their number in food.
 - **Depot Deliveries**: At the start of each round, a supply delivery automatically adds **+20 fuel** and **+12 food** to your command center.
+- **Shelters you can manage**: evacuation centers hold 200 and 150, the hospital holds 60 (ambulances deliver there first; 30 patients go home each round). A full shelter refuses new rescues. Use **Move people out** (8 fuel + 4 food, up to 80 people, once per center per round) to free space.
 - **Emergency Resupply Convoy**: Teams can call one emergency resupply per game granting **+40 fuel** and **+25 food** at the next round start.
   - *Risk Factor*: If requested after the bridge breaks in Round 3, the convoy is blocked and delayed.
 - **Cost of Delay (15% Loss)**: Flooded areas with unrescued residents decline by **15% each round**. Waiting too long costs lives.
@@ -56,6 +58,8 @@ Each visible report card in the Reports tab features a dedicated **Cross-check D
 - **End-Game Evidence Replay**: Interactive timeline filterable by round and category, displaying the evidentiary rationale behind every point earned or lost.
 
 ### 7. Multiplayer & Demo Modes
+> **Status:** rooms and the leaderboard currently sync only between tabs of one browser (BroadcastChannel/localStorage). Real multi-computer play needs the Supabase client and server routes described in [`SUPABASE_CLIENT_GUIDE.md`](SUPABASE_CLIENT_GUIDE.md). The server handler and the hardened SQL are written and tested/reviewed, but not yet connected or run against a database.
+
 - **Offline Demo Mode (Default)**: Runs instantly in any browser with 9 simulated bot teams on the leaderboard. No server or API keys required.
 - **Multiplayer Architecture**: Includes Supabase Postgres schema ([`supabase/migrations/01_init.sql`](supabase/migrations/01_init.sql)) with Row-Level Security, Realtime sync, idempotent action tables, and authoritative server validation ([`server/actionHandler.ts`](server/actionHandler.ts)).
 
@@ -72,7 +76,7 @@ npm install
 ```
 
 ### 2. Run the Test Suite
-The project includes 31 Vitest unit and engine tests covering scoring, resource replenishment, drone limits, delay decay, cross-check channels, and permissions:
+The project includes 48 Vitest unit, engine and server-handler tests covering scoring, resource replenishment, drone limits, delay decay, cross-check channels, and permissions:
 ```bash
 npm test
 ```

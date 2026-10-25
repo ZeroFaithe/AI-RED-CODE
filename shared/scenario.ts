@@ -4,7 +4,16 @@ export const B: Barangay[] = [
   { id: 'C', n: 'Bagong Silang', x: 650, y: 235, pop: 90, fr: 3 }, { id: 'D', n: 'Pulo', x: 300, y: 345, pop: 160, fr: 2 },
   { id: 'E', n: 'Masagana', x: 115, y: 340, pop: 110, fr: 99 }, { id: 'F', n: 'Dalig', x: 570, y: 385, pop: 130, fr: 4 }];
 export const EV = [{ id: 'E1', n: 'Evac Center 1', x: 80, y: 470, cap: 200 }, { id: 'E2', n: 'Evac Center 2', x: 770, y: 440, cap: 150 }];
-export const COST: Record<UnitType, Record<string, number>> = { boat: { fuel: 12, food: 6 }, amb: { fuel: 8, med: 1 }, drone: { fuel: 8 } };
+// ── Balance (v2): starting supplies and costs, tuned so careful play can reach most residents ──
+export const START_RES = { fuel: 160, food: 100, med: 4 };
+export const COST: Record<UnitType, Record<string, number>> = { boat: { fuel: 10, food: 4 }, amb: { fuel: 6, med: 1 }, drone: { fuel: 6 } };
+/** Food eaten per person evacuated (was 10%; now 5%). */
+export const FOOD_PER_PERSON = 0.05;
+// ── Shelters ──
+export const HOSPITAL_CAP = 60;        // ambulances deliver here first
+export const HOSPITAL_DISCHARGE = 30;  // patients discharged at each round start
+export const RELOCATE_COST = { fuel: 8, food: 4 };
+export const RELOCATE_MAX = 80;        // people moved per convoy, one convoy per center per round
 export const CAP = { boat: 40, amb: 20, drone: 0 };
 /** Only areas that actually flood count toward rescue effectiveness (Masagana never floods: its reports are false). */
 export const TOTPOP = B.filter(b => b.fr < 99).reduce((a, b) => a + b.pop, 0);
