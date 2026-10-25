@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
-import { getAdminClient } from '../server/supabaseServer';
-import { verifyHostPasscode } from '../server/hostAuth';
-import { newTeamState } from '../shared/sim';
+import { getAdminClient } from '../server/supabaseServer.ts';
+import { verifyHostPasscode } from '../server/hostAuth.ts';
+import { newTeamState } from '../shared/sim.ts';
 
 function parseBody(body: any): any {
   if (typeof body === 'string') {
@@ -30,11 +30,12 @@ export default async function handler(req: any, res: any) {
 
     if (method === 'POST') {
       const { passcode, token, roundTime, checkOnly } = body;
+      const hostPasscode = (globalThis as any).process?.env?.HOST_PASSCODE;
 
-    const valid = verifyHostPasscode(passcode, process.env.HOST_PASSCODE);
-    if (checkOnly) {
-      return res.status(200).json({ ok: true, valid });
-    }
+      const valid = verifyHostPasscode(passcode, hostPasscode);
+      if (checkOnly) {
+        return res.status(200).json({ ok: true, valid });
+      }
 
     if (!valid) {
       return res.status(401).json({ ok: false, error: 'Invalid facilitator passcode' });
