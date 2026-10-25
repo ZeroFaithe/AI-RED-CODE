@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { isDemoMode, fetchLeaderboard, subscribeLeaderboard, verifyHostPasscodeServer, type LeaderboardRow } from '../multiplayer/client';
 import { B, EV, R0, DEPOT_FUEL, DEPOT_FOOD, RESUPPLY_FUEL, RESUPPLY_FOOD, HOSPITAL_CAP, RELOCATE_COST, RELOCATE_MAX } from '../../shared/scenario';
 import { CAPS, CN, cats, total } from '../../shared/scoring';
 import { reports } from '../../shared/sim';
@@ -268,22 +269,98 @@ export function Score({ s }: { s: TeamState }) {
   );
 }
 
-export function Board({ s, t }: { s: TeamState; t: number }) {
+export function Board({ s, t, sessionId, myTeamId }: { s: TeamState; t: number; sessionId?: string; myTeamId?: string }) {
+  const [liveRows, setLiveRows] = useState<(LeaderboardRow & { rank: number; prevRank?: number })[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (isDemoMode() || !sessionId) return;
+    let mounted = true;
+    setLoading(true);
+    fetchLeaderboard(sessionId)
+      .then(rows => {
+        if (!mounted) return;
+        const sorted = [...rows].sort((a, b) => b.score - a.score);
+        setLiveRows(sorted.map((r, i) => ({ ...r, rank: i + 1 })));
+        setLoading(false);
+      })
+      .catch(err => {
+        console.warn('Failed to fetch live leaderboard:', err);
+        setLoading(false);
+      });
+
+    const unsubscribe = subscribeLeaderboard(sessionId, (updated) => {
+      setLiveRows(prev => {
+        const next = [...prev];
+        const idx = next.findIndex(r => r.id === updated.id);
+        if (idx >= 0) {
+          next[idx] = { ...next[idx], ...updated };
+        } else {
+          next.push({ ...updated, rank: next.length + 1 });
+        }
+        next.sort((a, b) => b.score - a.score);
+        return next.map((r, i) => ({
+          ...r,
+          prevRank: r.rank,
+          rank: i + 1,
+        }));
+      });
+    });
+
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, [sessionId]);
+
+  const demoRows = board(total(s).all, s.round, t, s.finished);
+
   return (
     <div>
       <div className="intro">
-        <b>Leaderboard: 10 Competing Teams.</b><br />
+        <b>Leaderboard: {isDemoMode() || !sessionId ? '10 Competing Teams (Demo Mode)' : `${liveRows.length} Registered Teams`}.</b><br />
         Ranks update in real time as teams verify reports, evacuate residents, and manage resupply.
       </div>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ borderBottom: '2px solid #cbd5e1', textAlign: 'left', fontSize: 13, color: '#64748b' }}>
+            <th style={{ padding: '6px 4px', width: 45 }}>Rank</th>
+            <th style={{ padding: '6px 4px' }}>Team</th>
+            <th style={{ padding: '6px 4px', textAlign: 'right' }}>Score</th>
+          </tr>
+        </thead>
         <tbody>
-          {board(total(s).all, s.round, t, s.finished).map(x => (
-            <tr key={x.n} style={{ fontWeight: x.you ? 800 : 400, background: x.you ? '#fff0ee' : undefined, borderBottom: '1px solid #edf2f7' }}>
-              <td style={{ padding: '6px 4px' }}>#{x.r}</td>
-              <td style={{ padding: '6px 4px' }}>{x.n}</td>
-              <td style={{ padding: '6px 4px', textAlign: 'right' }}>{x.s} pts</td>
+          {(!sessionId || isDemoMode()) ? (
+            demoRows.map(x => (
+              <tr key={x.n} style={{ fontWeight: x.you ? 800 : 400, background: x.you ? '#fff0ee' : undefined, borderBottom: '1px solid #edf2f7' }}>
+                <td style={{ padding: '6px 4px' }}>#{x.r}</td>
+                <td style={{ padding: '6px 4px' }}>{x.n}</td>
+                <td style={{ padding: '6px 4px', textAlign: 'right' }}>{x.s} pts</td>
+              </tr>
+            ))
+          ) : liveRows.length === 0 ? (
+            <tr>
+              <td colSpan={3} style={{ padding: '16px 4px', textAlign: 'center', color: '#94a3b8' }}>
+                {loading ? 'Loading live leaderboard...' : 'No active teams registered yet.'}
+              </td>
             </tr>
-          ))}
+          ) : (
+            liveRows.map(x => {
+              const isYou = x.id === myTeamId;
+              const rankDelta = x.prevRank !== undefined ? x.prevRank - x.rank : 0;
+              return (
+                <tr key={x.id} style={{ fontWeight: isYou ? 800 : 400, background: isYou ? '#fff0ee' : undefined, borderBottom: '1px solid #edf2f7' }}>
+                  <td style={{ padding: '6px 4px' }}>
+                    #{x.rank}
+                    {rankDelta > 0 && <span style={{ color: '#16a34a', fontSize: 11, marginLeft: 4 }}>▲{rankDelta}</span>}
+                    {rankDelta < 0 && <span style={{ color: '#dc2626', fontSize: 11, marginLeft: 4 }}>▼{Math.abs(rankDelta)}</span>}
+                  </td>
+                  <td style={{ padding: '6px 4px' }}>{x.name}{isYou ? ' (You)' : ''}</td>
+                  <td style={{ padding: '6px 4px', textAlign: 'right' }}>{x.score} pts</td>
+                </tr>
+              );
+            })
+          )}
         </tbody>
       </table>
     </div>
@@ -297,22 +374,47 @@ export function Shelters({ s, d }: { s: TeamState; d: D }) {
     <div style={{ marginTop: 6 }}>🏥 Hospital (ambulances deliver here first): <b>{s.ev.H ?? 0}/{HOSPITAL_CAP}</b> <span className="hint">{HOSPITAL_CAP > 0 && '30 patients go home at each round start.'}</span>{bar(s.ev.H ?? 0, HOSPITAL_CAP)}</div>
     <div className="hint">Moved to the provincial shelter so far: {s.relocated}</div></div>;
 }
+
 export function Host({ s, d, paused, setPaused }: { s: TeamState; d: D; paused: boolean; setPaused: (b: boolean) => void }) {
   const [ok, setOk] = useState(false), [code, setCode] = useState('');
+  const [errorMsg, setErrorMsg] = useState(''), [checking, setChecking] = useState(false);
+
+  const handleUnlock = async () => {
+    setErrorMsg('');
+    setChecking(true);
+    const valid = await verifyHostPasscodeServer(code);
+    setChecking(false);
+    if (valid) {
+      setOk(true);
+    } else {
+      setErrorMsg('Invalid facilitator passcode.');
+    }
+  };
+
   if (!ok) {
     return (
       <div>
         <div className="intro">
           <b>Teacher / Facilitator Dashboard.</b><br />
-          Demo passcode: <code>CODERED</code>
+          {isDemoMode() ? (
+            <span>Demo passcode: <code>CODERED</code></span>
+          ) : (
+            <span>Enter the secret facilitator passcode configured on the server.</span>
+          )}
         </div>
         <input
           value={code}
           onChange={e => setCode(e.target.value)}
           placeholder="Passcode"
+          type="password"
           style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e0' }}
         />
-        <Btn kind="pri" onClick={() => setOk(code === 'CODERED')}>Unlock Dashboard</Btn>
+        {errorMsg && <div style={{ color: '#ef4444', fontSize: 13, marginTop: 4 }}>⚠️ {errorMsg}</div>}
+        <div style={{ marginTop: 8 }}>
+          <Btn kind="pri" onClick={handleUnlock} disabled={checking}>
+            {checking ? 'Verifying...' : 'Unlock Dashboard'}
+          </Btn>
+        </div>
       </div>
     );
   }

@@ -6,6 +6,8 @@ export const B: Barangay[] = [
 export const EV = [{ id: 'E1', n: 'Evac Center 1', x: 80, y: 470, cap: 200 }, { id: 'E2', n: 'Evac Center 2', x: 770, y: 440, cap: 150 }];
 // ── Balance (v2): starting supplies and costs, tuned so careful play can reach most residents ──
 export const START_RES = { fuel: 160, food: 100, med: 4 };
+export const HQ = { x: 450, y: 505 };
+export const SPD: Record<UnitType, number> = { boat: 110, amb: 150, drone: 210 };
 export const COST: Record<UnitType, Record<string, number>> = { boat: { fuel: 10, food: 4 }, amb: { fuel: 6, med: 1 }, drone: { fuel: 6 } };
 /** Food eaten per person evacuated (was 10%; now 5%). */
 export const FOOD_PER_PERSON = 0.05;

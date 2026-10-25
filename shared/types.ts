@@ -4,7 +4,7 @@ export type CheckChannel = 'official' | 'news' | 'social' | 'barangay';
 export interface Barangay { id: string; n: string; x: number; y: number; pop: number; fr: number }
 export interface Report { id: string; rd: number; b: string; cl: 'f' | 'd'; src: string; k: string; age: number; cf: number; t: 0 | 1; g: string; pv: string; tx: string }
 export interface LedgerEntry { rd: number; cat: Cat; pts: number; why: string; ev: string }
-export interface Dep { b: string; src: 'manual' | 'ai'; rid?: string; fake?: boolean; sup: boolean; opp: boolean; fuel: number }
+export interface Dep { b: string; src: 'manual' | 'ai'; rid?: string; fake?: boolean; sup: boolean; opp: boolean; fuel: number; departedAt?: number; dur?: number }
 export interface Unit { id: string; ty: UnitType; st: 'idle' | 'out'; tg?: string; dep?: Dep }
 export interface Rec { id: string; rd: number; b: string | null; txt: string; cites: string[]; fake: string | null; unc: string; st: 'pending' | 'approved' | 'rejected' | 'flagged' | 'info' }
 export interface Stats { caught: number; vOK: number; vN: number; unsup: number; hall: number; waste: number; deps: number; ok: number }

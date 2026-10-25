@@ -10,6 +10,17 @@ import {
   broadcast,
   subscribeToSync,
 } from './multiplayer/roomSync';
+import {
+  isDemoMode,
+  ensureSignedIn,
+  fetchOwnState,
+  fetchSession,
+  sendAction,
+  pollTick,
+  requestAiAnalysis,
+  fetchHostTeams,
+  patchSession,
+} from './multiplayer/client';
 import { B, COST, RT, DEPOT_FUEL, DEPOT_FOOD, RESUPPLY_FUEL, RESUPPLY_FOOD } from '../shared/scenario';
 import { apply, flooded, newTeamState } from '../shared/sim';
 import { total } from '../shared/scoring';
@@ -83,24 +94,136 @@ export default function App() {
     return fresh;
   };
 
-  const run = (a: Record<string, unknown>, who: Actor): boolean => {
-    const currentTeamId = sr.current.teamId;
+  // Auto-reconnect on mount if student reloads browser
+  useEffect(() => {
+    if (isDemoMode()) return;
+    const savedSessionId = localStorage.getItem('cr_session_id');
+    const savedTeamId = localStorage.getItem('cr_team_id');
+    const savedTeamName = localStorage.getItem('cr_team_name') || 'Team Alpha';
+
+    if (savedSessionId && savedTeamId) {
+      ensureSignedIn().then(async () => {
+        try {
+          const { state } = await fetchOwnState(savedTeamId);
+          const sessRes = await fetchSession(savedSessionId);
+          if (sessRes.ok && sessRes.session) {
+            sr.current = state;
+            setS(state);
+            setMyTeam({ id: savedTeamId, name: savedTeamName });
+            setCurrentRoom({
+              code: sessRes.session.code,
+              name: 'Typhoon Crisis Response',
+              hostId: 'host',
+              maxTeams: 10,
+              roundTime: sessRes.session.round_time || 120,
+              droneFlights: 3,
+              status: sessRes.session.status === 'active' ? 'in_progress' : 'lobby',
+              currentRound: sessRes.session.round,
+              timeRemaining: 120,
+              isPaused: sessRes.session.status === 'paused',
+              createdAt: Date.now(),
+              teams: [],
+              logs: [],
+            });
+            if (sessRes.session.round_ends_at) {
+              const rem = Math.max(0, Math.round((new Date(sessRes.session.round_ends_at).getTime() - Date.now()) / 1000));
+              setT(rem);
+            }
+            setViewMode('player_game');
+          }
+        } catch (err) {
+          console.warn('Auto-reconnect error:', err);
+        }
+      });
+    }
+  }, []);
+
+  // Live tick polling: arrivals, timer countdown, round advances
+  useEffect(() => {
+    if (isDemoMode() || viewMode !== 'player_game' || !myTeam) return;
+    const sessionId = localStorage.getItem('cr_session_id');
+    if (!sessionId) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const tick = await pollTick(sessionId, myTeam.id);
+        if (tick.ok && tick.state) {
+          // Detect completed arrivals and animate return trip
+          for (const u of tick.state.units) {
+            const prevU = sr.current.units.find(x => x.id === u.id);
+            if (prevU && prevU.st === 'out' && u.st === 'idle') {
+              const b = B.find(x => x.id === prevU.tg);
+              if (b) fly(u.id, u.ty, b, HQ);
+            }
+          }
+          sr.current = tick.state;
+          setS(tick.state);
+          if (tick.session?.round_ends_at) {
+            const rem = Math.max(0, Math.round((new Date(tick.session.round_ends_at).getTime() - Date.now()) / 1000));
+            setT(rem);
+          }
+          if (tick.session?.status) {
+            setPaused(tick.session.status === 'paused');
+          }
+        }
+      } catch { /* ignore tick polling error */ }
+    }, 2500);
+
+    return () => clearInterval(interval);
+  }, [viewMode, myTeam]);
+
+  const run = async (a: Record<string, unknown>, who: Actor): Promise<boolean> => {
+    const currentTeamId = myTeam?.id || sr.current.teamId;
     const actionTeamId = (a.teamId as string) || currentTeamId;
-    const actor: Actor =
-      who.role === 'host'
-        ? { role: 'host' }
-        : who.role === 'system'
-        ? { role: 'system' }
-        : { role: 'team', teamId: currentTeamId };
-    const r = apply(sr.current, { id: crypto.randomUUID(), teamId: actionTeamId, ...a } as Action, actor);
-    if (!r.ok) {
-      say(r.error);
+    const sessionId = localStorage.getItem('cr_session_id');
+
+    if (isDemoMode() || !sessionId) {
+      const actor: Actor =
+        who.role === 'host'
+          ? { role: 'host' }
+          : who.role === 'system'
+          ? { role: 'system' }
+          : { role: 'team', teamId: currentTeamId };
+      const r = apply(sr.current, { id: crypto.randomUUID(), teamId: actionTeamId, ...a } as Action, actor);
+      if (!r.ok) {
+        say(r.error);
+        return false;
+      }
+      sr.current = r.state;
+      setS(r.state);
+      try { localStorage.setItem(KEY, JSON.stringify(r.state)); } catch { /* ignore */ }
+      return true;
+    }
+
+    // Live multiplayer mode: fresh action ID per click
+    const actionId = crypto.randomUUID();
+    const actionObj = { id: actionId, teamId: actionTeamId, ...a } as Action;
+
+    try {
+      const res = await sendAction(sessionId, actionTeamId, actionObj);
+      if (!res.ok) {
+        say(res.error || 'Action rejected');
+        return false;
+      }
+      if (res.state) {
+        sr.current = res.state;
+        setS(res.state);
+        try { localStorage.setItem(KEY, JSON.stringify(res.state)); } catch { /* ignore */ }
+      }
+      return true;
+    } catch {
+      // Re-send with the EXACT same action id on dropped connection retry
+      try {
+        const retryRes = await sendAction(sessionId, actionTeamId, actionObj);
+        if (retryRes.ok && retryRes.state) {
+          sr.current = retryRes.state;
+          setS(retryRes.state);
+          return true;
+        }
+      } catch { /* ignore retry err */ }
+      say('Network error. Could not send action.');
       return false;
     }
-    sr.current = r.state;
-    setS(r.state);
-    try { localStorage.setItem(KEY, JSON.stringify(r.state)); } catch { /* ignore */ }
-    return true;
   };
 
   const fly = (id: string, ty: keyof typeof SPD, from: { x: number; y: number }, to: { x: number; y: number }) => {
@@ -114,25 +237,49 @@ export default function App() {
       .filter(u => u.st === 'out' && !moves.current.some(m => m.unit === u.id))
       .forEach(u => {
         const b = B.find(x => x.id === u.tg)!, dur = fly(u.id, u.ty, HQ, b);
-        setTimeout(() => {
-          if (run({ type: 'arrive', unit: u.id }, { role: 'system' })) {
-            fly(u.id, u.ty, b, HQ);
-          }
-        }, dur * 1000);
+        if (isDemoMode()) {
+          setTimeout(() => {
+            void run({ type: 'arrive', unit: u.id }, { role: 'system' }).then(ok => {
+              if (ok) fly(u.id, u.ty, b, HQ);
+            });
+          }, dur * 1000);
+        }
+        // In live multiplayer mode, arrival is processed authoritatively on server
+        // and animated back when pollTick detects u.st === 'idle'
       });
   };
 
   const d: D = (a, w = 'team') => {
-    const currentTeamId = sr.current.teamId;
-    const ok = run(a, w === 'host' ? { role: 'host' } : { role: 'team', teamId: currentTeamId });
-    if (ok) {
-      if (a.type === 'advance') setT(120);
-      if (a.type === 'approve') launch();
-      if (a.type === 'resupply') {
-        say('Emergency resupply requested! Arrives next round (one round later if the bridge is out).');
+    const currentTeamId = myTeam?.id || sr.current.teamId;
+    void (async () => {
+      // AI helper ask route
+      if (a.type === 'ask' && !isDemoMode()) {
+        const sessionId = localStorage.getItem('cr_session_id');
+        if (sessionId) {
+          try {
+            const rec = await requestAiAnalysis(sessionId, currentTeamId, sr.current, (a.prompt as string) || '');
+            const nextState = structuredClone(sr.current);
+            nextState.ai.push(rec);
+            sr.current = nextState;
+            setS(nextState);
+            return;
+          } catch (err: any) {
+            say(err?.message || 'AI request failed');
+            return;
+          }
+        }
       }
-    }
-    return ok;
+
+      const ok = await run(a, w === 'host' ? { role: 'host' } : { role: 'team', teamId: currentTeamId });
+      if (ok) {
+        if (a.type === 'advance' && isDemoMode()) setT(120);
+        if (a.type === 'approve') launch();
+        if (a.type === 'resupply') {
+          say('Emergency resupply requested! Arrives next round (one round later if the bridge is out).');
+        }
+      }
+    })();
+    return true;
   };
 
   const order = (id: string, b: string) => {
@@ -145,7 +292,11 @@ export default function App() {
       if (sr.current.round >= 5) {
         return say('Scout drone grounded in Round 5 due to storm blackout!');
       }
-      if (run({ type: 'deploy', unit: id, b }, { role: 'team', teamId: sr.current.teamId })) launch();
+      void (async () => {
+        if (await run({ type: 'deploy', unit: id, b }, { role: 'team', teamId: sr.current.teamId })) {
+          launch();
+        }
+      })();
     } else {
       setPend({ unit: id, b });
     }
@@ -276,6 +427,30 @@ export default function App() {
   }
 
   if (viewMode === 'host_leaderboard' && currentRoom) {
+    /**
+     * Fire a host action against the real server API (in live mode) so that
+     * all student browsers pick it up on their next pollTick, AND keep the
+     * local BroadcastChannel broadcast for same-browser demo mode.
+     */
+    const hostApiAction = async (actionPayload: Record<string, unknown>) => {
+      const sessionId = localStorage.getItem('cr_host_session_id');
+      if (isDemoMode() || !sessionId) return;
+      try {
+        // Fetch the first team id from this session to use as the action target
+        // (server-side, host actions are applied to ALL teams by listSessionTeamIds)
+        const { teams } = await fetchHostTeams(sessionId);
+        const firstTeamId = teams?.[0]?.id;
+        if (!firstTeamId) return;
+        await sendAction(sessionId, firstTeamId, {
+          id: crypto.randomUUID(),
+          teamId: firstTeamId,
+          ...actionPayload,
+        } as any);
+      } catch (err) {
+        console.warn('Host API action error:', err);
+      }
+    };
+
     return (
       <HostLeaderboard
         room={currentRoom}
@@ -297,12 +472,14 @@ export default function App() {
           setCurrentRoom(updated);
           broadcast({ type: 'HOST_ACTION', roomCode: currentRoom.code, action: 'advance' });
           broadcast({ type: 'ROOM_UPDATE', room: updated });
+          void hostApiAction({ type: 'advance' });
         }}
         onTogglePause={() => {
           const fresh = getRoom(currentRoom.code) || currentRoom;
+          const nowPaused = !fresh.isPaused;
           const updated: ServerRoom = {
             ...fresh,
-            isPaused: !fresh.isPaused,
+            isPaused: nowPaused,
             logs: [
               {
                 time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -313,8 +490,13 @@ export default function App() {
           };
           saveRoom(updated);
           setCurrentRoom(updated);
-          broadcast({ type: 'HOST_ACTION', roomCode: currentRoom.code, action: updated.isPaused ? 'pause' : 'resume' });
+          broadcast({ type: 'HOST_ACTION', roomCode: currentRoom.code, action: nowPaused ? 'pause' : 'resume' });
           broadcast({ type: 'ROOM_UPDATE', room: updated });
+          // Pause/resume via direct PATCH to session table
+          const sessionId = localStorage.getItem('cr_host_session_id');
+          if (!isDemoMode() && sessionId) {
+            void patchSession(sessionId, nowPaused ? 'pause' : 'resume').catch(console.warn);
+          }
         }}
         onInject={k => {
           const desc = k === 's' ? 'Storm surge hits Dalig early' : k === 'r' ? 'Viral unverified social media rumor injected' : 'Simulated AI uplink outage';
@@ -333,6 +515,7 @@ export default function App() {
           setCurrentRoom(updated);
           broadcast({ type: 'HOST_ACTION', roomCode: currentRoom.code, action: 'inject', payload: k });
           broadcast({ type: 'ROOM_UPDATE', room: updated });
+          void hostApiAction({ type: 'inject', k });
         }}
         onExit={() => setViewMode('menu')}
       />
@@ -441,8 +624,10 @@ export default function App() {
                 <b>Send {UI[pu.ty][1]} {pu.id} to {B.find(x => x.id === pend.b)!.n}?</b> Cost: {Object.entries(COST[pu.ty]).map(([k, v]) => `${v} ${k}`).join(', ')}.
                 <button
                   className="btn ok"
-                  onClick={() => {
-                    if (run({ type: 'deploy', unit: pend.unit, b: pend.b }, { role: 'team', teamId: sr.current.teamId })) launch();
+                  onClick={async () => {
+                    if (await run({ type: 'deploy', unit: pend.unit, b: pend.b }, { role: 'team', teamId: sr.current.teamId })) {
+                      launch();
+                    }
                     setPend(null);
                   }}
                 >
@@ -478,7 +663,7 @@ export default function App() {
             {tab === 'rep' && <><Shelters s={s} d={d} /><Reports s={s} d={d} /></>}
             {tab === 'ai' && <Analyst s={s} d={d} />}
             {tab === 'sco' && <Score s={s} />}
-            {tab === 'brd' && <Board s={s} t={t} />}
+            {tab === 'brd' && <Board s={s} t={t} sessionId={localStorage.getItem('cr_session_id') || undefined} myTeamId={myTeam?.id} />}
             {tab === 'host' && <Host s={s} d={d} paused={paused} setPaused={setPaused} />}
           </div>
         </aside>

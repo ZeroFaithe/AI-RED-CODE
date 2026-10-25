@@ -10,6 +10,16 @@ import {
   subscribeToSync,
   PRESET_BOT_NAMES,
 } from '../multiplayer/roomSync';
+import {
+  isDemoMode,
+  ensureSignedIn,
+  joinSession,
+  createSession,
+  fetchSession,
+  fetchHostTeams,
+  sendAction,
+  patchSession,
+} from '../multiplayer/client';
 import { RT } from '../../shared/scenario';
 
 /* ───────────────────────────────────────────────────────────────────────────
@@ -178,6 +188,7 @@ export function JoinPage({ onBack, onGameStart }: JoinPageProps) {
   const [joined, setJoined] = useState(false);
   const [activeRoom, setActiveRoom] = useState<ServerRoom | null>(null);
   const [myTeamId, setMyTeamId] = useState('');
+  const [liveSessionId, setLiveSessionId] = useState('');
   const [copied, setCopied] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -189,7 +200,50 @@ export function JoinPage({ onBack, onGameStart }: JoinPageProps) {
     }
   }, []);
 
-  // Listen for sync messages (e.g. host starting game or room updating)
+  // Live polling for host game start
+  useEffect(() => {
+    if (isDemoMode() || !joined || !liveSessionId) return;
+    const interval = setInterval(async () => {
+      try {
+        const sessRes = await fetchSession(liveSessionId);
+        if (sessRes.ok && sessRes.session) {
+          if (sessRes.session.status === 'active') {
+            clearInterval(interval);
+            const roomObj: ServerRoom = {
+              code: sessRes.session.code,
+              name: 'Typhoon Crisis Response',
+              hostId: 'host',
+              maxTeams: 10,
+              roundTime: sessRes.session.round_time,
+              droneFlights: 3,
+              status: 'in_progress',
+              currentRound: sessRes.session.round,
+              timeRemaining: sessRes.session.round_time,
+              isPaused: false,
+              createdAt: Date.now(),
+              teams: (sessRes.teams || []).filter((t: any) => t.owner).map((t: any) => ({
+                id: t.id,
+                name: t.name,
+                score: t.score,
+                opsScore: 0,
+                aiScore: 0,
+                savedCount: 0,
+                wasteCount: 0,
+                reportsChecked: 0,
+                status: 'ready',
+                joinedAt: Date.now(),
+              })),
+              logs: [],
+            };
+            onGameStart(roomObj, myTeamId, teamName);
+          }
+        }
+      } catch { /* ignore poll error */ }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [joined, liveSessionId, myTeamId, teamName, onGameStart]);
+
+  // Listen for sync messages (demo mode or local broadcast)
   useEffect(() => {
     const unsubscribe = subscribeToSync(msg => {
       if (!activeRoom) return;
@@ -212,7 +266,7 @@ export function JoinPage({ onBack, onGameStart }: JoinPageProps) {
     return () => unsubscribe();
   }, [activeRoom, myTeamId, teamName, onGameStart]);
 
-  const handleJoin = () => {
+  const handleJoin = async () => {
     const trimmedCode = code.trim().toUpperCase();
     if (!trimmedCode) {
       setErrorMsg('Please enter a server room code.');
@@ -220,12 +274,70 @@ export function JoinPage({ onBack, onGameStart }: JoinPageProps) {
     }
     const cleanName = teamName.trim() || 'Responder Unit';
 
+    // Live Supabase mode
+    if (!isDemoMode()) {
+      setErrorMsg('');
+      try {
+        await ensureSignedIn();
+        const res = await joinSession(trimmedCode, cleanName);
+        if (!res.ok) {
+          setErrorMsg(res.error || 'Failed to join session');
+          return;
+        }
+        setMyTeamId(res.teamId);
+        setLiveSessionId(res.sessionId);
+        try {
+          localStorage.setItem('cr_session_id', res.sessionId);
+          localStorage.setItem('cr_team_id', res.teamId);
+          localStorage.setItem('cr_team_name', res.teamName);
+          localStorage.setItem('cr_last_room', res.sessionCode);
+        } catch { /* ignore */ }
+
+        const sessRes = await fetchSession(res.sessionId);
+        const dummyRoom: ServerRoom = {
+          code: res.sessionCode,
+          name: 'Typhoon Crisis Response',
+          hostId: 'host',
+          maxTeams: 10,
+          roundTime: sessRes.session?.round_time || 120,
+          droneFlights: 3,
+          status: sessRes.session?.status === 'active' ? 'in_progress' : 'lobby',
+          currentRound: sessRes.session?.round || 1,
+          timeRemaining: sessRes.session?.round_time || 120,
+          isPaused: false,
+          createdAt: Date.now(),
+          teams: (sessRes.teams || []).filter((t: any) => t.owner).map((t: any) => ({
+            id: t.id,
+            name: t.name,
+            score: t.score,
+            opsScore: 0,
+            aiScore: 0,
+            savedCount: 0,
+            wasteCount: 0,
+            reportsChecked: 0,
+            status: 'ready',
+            joinedAt: Date.now(),
+          })),
+          logs: [],
+        };
+        setActiveRoom(dummyRoom);
+        setJoined(true);
+        setErrorMsg('');
+
+        if (sessRes.session?.status === 'active' || res.reconnected) {
+          onGameStart(dummyRoom, res.teamId, res.teamName);
+        }
+      } catch (err: any) {
+        setErrorMsg(err?.message || 'Failed to connect to server');
+      }
+      return;
+    }
+
     let room = getRoom(trimmedCode);
     const teamId = 'team-' + Date.now();
     setMyTeamId(teamId);
 
     if (!room) {
-      // Create a local room representation if joining first or in test mode
       room = {
         code: trimmedCode,
         name: 'Disaster Response Command',
@@ -475,8 +587,10 @@ export function HostPage({ onBack, onStartGame }: HostPageProps) {
   const [passcode, setPasscode] = useState('CODERED');
   const [room, setRoom] = useState<ServerRoom | null>(null);
   const [copied, setCopied] = useState(false);
+  const [hostSessionId, setHostSessionId] = useState('');
+  const [hostError, setHostError] = useState('');
 
-  // Sync listener to see players join in real time
+  // Sync listener to see players join in real time (demo mode)
   useEffect(() => {
     if (!room) return;
     const unsubscribe = subscribeToSync(msg => {
@@ -492,7 +606,74 @@ export function HostPage({ onBack, onStartGame }: HostPageProps) {
     return () => unsubscribe();
   }, [room]);
 
-  const handleCreateServer = () => {
+  // Live polling for joined players in host lobby
+  useEffect(() => {
+    if (isDemoMode() || !created || !hostSessionId) return;
+    const interval = setInterval(async () => {
+      try {
+        const sessRes = await fetchSession(hostSessionId);
+        if (sessRes.ok && sessRes.session) {
+          const registeredTeams = (sessRes.teams || [])
+            .filter((t: any) => t.owner)
+            .map((t: any) => ({
+              id: t.id,
+              name: t.name,
+              score: t.score || 0,
+              opsScore: 0,
+              aiScore: 0,
+              savedCount: 0,
+              wasteCount: 0,
+              reportsChecked: 0,
+              status: 'ready' as const,
+              joinedAt: Date.now(),
+            }));
+          setRoom(prev => (prev ? { ...prev, teams: registeredTeams } : null));
+        }
+      } catch { /* ignore */ }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [created, hostSessionId]);
+
+  const handleCreateServer = async () => {
+    if (!isDemoMode()) {
+      setHostError('');
+      try {
+        await ensureSignedIn();
+        const res = await createSession(passcode, roundTime);
+        if (!res.ok || !res.session) {
+          setHostError(res.error || 'Failed to create server session.');
+          return;
+        }
+        setHostSessionId(res.session.id);
+        const newRoom: ServerRoom = {
+          code: res.session.code,
+          name: roomName,
+          hostId: 'host',
+          maxTeams: 10,
+          roundTime,
+          droneFlights: 3,
+          status: 'lobby',
+          currentRound: 1,
+          timeRemaining: roundTime,
+          isPaused: false,
+          createdAt: Date.now(),
+          teams: [],
+          logs: [{ time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), text: `Command server created. Code: ${res.session.code}` }],
+        };
+        try {
+          localStorage.setItem('cr_host_session_id', res.session.id);
+          localStorage.setItem('cr_host_code', res.session.code);
+          localStorage.setItem('cr_session_id', res.session.id);
+          localStorage.setItem('cr_session_code', res.session.code);
+        } catch { /* ignore */ }
+        setRoom(newRoom);
+        setCreated(true);
+      } catch (err: any) {
+        setHostError(err?.message || 'Server error creating session');
+      }
+      return;
+    }
+
     const newRoom = createNewRoom({
       code: roomCode,
       name: roomName,
@@ -578,8 +759,27 @@ export function HostPage({ onBack, onStartGame }: HostPageProps) {
     broadcast({ type: 'ROOM_UPDATE', room: updated });
   };
 
-  const handleStartGame = () => {
+  const handleStartGame = async () => {
     if (!room) return;
+    if (!isDemoMode() && hostSessionId) {
+      try {
+        // Activate the session: status → active, set round_ends_at, keep round at 1
+        await patchSession(hostSessionId, 'start');
+      } catch (err) {
+        console.warn('Host start session error:', err);
+      }
+      const updated: ServerRoom = {
+        ...room,
+        status: 'in_progress',
+        currentRound: 1,
+        timeRemaining: room.roundTime || 120,
+        isPaused: false,
+        startedAt: Date.now(),
+      };
+      setRoom(updated);
+      onStartGame(updated);
+      return;
+    }
     const updated: ServerRoom = {
       ...room,
       status: 'in_progress',
@@ -644,6 +844,11 @@ export function HostPage({ onBack, onStartGame }: HostPageProps) {
           {!created ? (
             /* Host Configuration Form */
             <div>
+              {hostError && (
+                <div className="waiting-alert" style={{ borderColor: '#ef4444', color: '#f87171', background: 'rgba(239, 68, 68, 0.15)', marginBottom: 16 }}>
+                  <span>⚠️</span> {hostError}
+                </div>
+              )}
               <div className="form-group">
                 <label className="form-label">Server Room Code</label>
                 <div style={{ display: 'flex', gap: 10 }}>
@@ -790,22 +995,24 @@ export function HostPage({ onBack, onStartGame }: HostPageProps) {
               {/* Roster Controls */}
               <div className="roster-header">
                 <span>Teams in Lobby ({room?.teams.length || 0} / {room?.maxTeams})</span>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button
-                    className="chip-btn"
-                    onClick={handleAddBotTeam}
-                    disabled={Boolean(room && room.teams.length >= room.maxTeams)}
-                  >
-                    ➕ Add Bot Team
-                  </button>
-                  <button
-                    className="chip-btn"
-                    onClick={handleFillAllSlots}
-                    disabled={Boolean(room && room.teams.length >= room.maxTeams)}
-                  >
-                    ⚡ Auto-Fill Slots
-                  </button>
-                </div>
+                {isDemoMode() && (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      className="chip-btn"
+                      onClick={handleAddBotTeam}
+                      disabled={Boolean(room && room.teams.length >= room.maxTeams)}
+                    >
+                      ➕ Add Bot Team
+                    </button>
+                    <button
+                      className="chip-btn"
+                      onClick={handleFillAllSlots}
+                      disabled={Boolean(room && room.teams.length >= room.maxTeams)}
+                    >
+                      ⚡ Auto-Fill Slots
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Connected Teams List */}
@@ -932,6 +1139,47 @@ export function HostLeaderboard({
       }
     });
     return () => unsubscribe();
+  }, [room.code]);
+
+  // Live host data polling from server
+  useEffect(() => {
+    if (isDemoMode()) return;
+    const sessionId = localStorage.getItem('cr_host_session_id') || room.code;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetchHostTeams(sessionId);
+        if (res.ok && res.teams && res.session) {
+          const registeredTeams: RoomTeam[] = res.teams
+            .filter((t: any) => t.owner)
+            .map((t: any) => {
+              const st = t.state;
+              return {
+                id: t.id,
+                name: t.name,
+                score: t.score ?? 0,
+                opsScore: st ? Math.round(st.saved * 0.5) : 0,
+                aiScore: st ? Math.round((t.score ?? 0) - st.saved * 0.5) : 0,
+                savedCount: st?.saved ?? 0,
+                wasteCount: st?.st?.waste ?? 0,
+                reportsChecked: st?.st?.vOK ?? 0,
+                status: 'ready' as const,
+                joinedAt: Date.now(),
+              };
+            });
+          setCurrentRoom(prev => ({
+            ...prev,
+            currentRound: res.session.round || prev.currentRound,
+            teams: registeredTeams,
+          }));
+          if (res.session.round_ends_at) {
+            const rem = Math.max(0, Math.round((new Date(res.session.round_ends_at).getTime() - Date.now()) / 1000));
+            setTimer(rem);
+          }
+          setIsPaused(res.session.status === 'paused');
+        }
+      } catch { /* ignore */ }
+    }, 2000);
+    return () => clearInterval(interval);
   }, [room.code]);
 
   // Timer countdown

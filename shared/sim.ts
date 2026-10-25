@@ -1,6 +1,6 @@
 import type { Action, Actor, Barangay, Rec, Report, Result, TeamState } from './types';
 import {
-  B, CAP, COST, EV, KW, R0, TOTPOP,
+  B, CAP, COST, EV, KW, R0, TOTPOP, HQ, SPD,
   DEPOT_FUEL, DEPOT_FOOD, RESUPPLY_FUEL, RESUPPLY_FOOD,
   DRONE_MAX_FLIGHTS, ANALYST_TOKENS_PER_ROUND, POP_DECAY,
   START_RES, FOOD_PER_PERSON, HOSPITAL_CAP, HOSPITAL_DISCHARGE, RELOCATE_COST, RELOCATE_MAX,
@@ -87,10 +87,16 @@ export function generateRec(s: TeamState): Rec {
   return { id, rd: s.round, b: b.id, txt: `Prioritise ${b.n} (about ${b.pop} residents). Dispatch a boat.`, cites: rs.map(r => r.id).concat(fake ? ['R77'] : []), fake: fake ? 'R77' : null, unc, st: 'pending' };
 }
 
+export const travelDuration = (unitType: 'boat' | 'amb' | 'drone', targetBarangayId: string): number => {
+  const b = B.find(x => x.id === targetBarangayId);
+  if (!b) return 0;
+  return dist(HQ, b) / (SPD[unitType] ?? 110);
+};
+
 const fail = (s: TeamState, error: string): Result => ({ ok: false, error, state: s });
 
 /** Authoritative reducer. Pure: returns a new state, never mutates the input. Idempotent per action id. */
-export function apply(s0: TeamState, a: Action, actor: Actor): Result {
+export function apply(s0: TeamState, a: Action, actor: Actor, clock?: number): Result {
   if (s0.done[a.id]) return { ok: true, state: s0, dup: true };
   const hostOnly = a.type === 'advance' || a.type === 'inject';
   if (hostOnly && actor.role !== 'host') return fail(s0, 'forbidden: host only');
@@ -98,12 +104,12 @@ export function apply(s0: TeamState, a: Action, actor: Actor): Result {
   if (!hostOnly && a.type !== 'arrive' && !(actor.role === 'team' && actor.teamId === s0.teamId)) return fail(s0, 'forbidden: not your team');
   if (a.teamId !== s0.teamId) return fail(s0, 'forbidden: action targets another team');
   if (s0.finished) return fail(s0, 'game finished');
-  const s = structuredClone(s0), err = run(s, a);
+  const s = structuredClone(s0), err = run(s, a, clock);
   if (err) return fail(s0, err);
   s.done[a.id] = 1; return { ok: true, state: s };
 }
 
-function run(s: TeamState, a: Action): string | null {
+function run(s: TeamState, a: Action, clock?: number): string | null {
   switch (a.type) {
     case 'deploy': {
       const u = s.units.find(x => x.id === a.unit), b = B.find(x => x.id === a.b);
@@ -119,7 +125,19 @@ function run(s: TeamState, a: Action): string | null {
       const c = COST[u.ty]; for (const k in c) if ((s.res as Record<string, number>)[k] < c[k]) return 'insufficient ' + k;
       const sup = support(s, b), op = opp(s, b);
       for (const k in c) (s.res as Record<string, number>)[k] -= c[k];
-      u.st = 'out'; u.tg = b.id; u.dep = { b: b.id, src: a.src ?? 'manual', rid: a.rid, fake: a.fake, sup, opp: op, fuel: c.fuel };
+      const dur = travelDuration(u.ty, b.id);
+      u.st = 'out'; u.tg = b.id;
+      u.dep = {
+        b: b.id,
+        src: a.src ?? 'manual',
+        rid: a.rid,
+        fake: a.fake,
+        sup,
+        opp: op,
+        fuel: c.fuel,
+        departedAt: clock,
+        dur,
+      };
       if (u.ty !== 'drone') s.st.deps++;
       log(s, `${u.id} dispatched to ${b.n}`); return null;
     }
