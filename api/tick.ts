@@ -1,6 +1,6 @@
-import { getAdminClient, createSupabaseServerDeps } from '../server/supabaseServer';
-import { processDueArrivals } from '../server/actionHandler';
-import { total } from '../shared/scoring';
+import { getAdminClient, createSupabaseServerDeps } from '../server/supabaseServer.js';
+import { processDueArrivals } from '../server/actionHandler.js';
+import { total } from '../shared/scoring.js';
 
 function parseBody(body: any): any {
   if (typeof body === 'string') {

@@ -1,12 +1,12 @@
-import type { Action, Actor, Barangay, Rec, Report, Result, TeamState } from './types';
+import type { Action, Actor, Barangay, Rec, Report, Result, TeamState } from './types.js';
 import {
   B, CAP, COST, EV, KW, R0, TOTPOP, HQ, SPD,
   DEPOT_FUEL, DEPOT_FOOD, RESUPPLY_FUEL, RESUPPLY_FOOD,
   DRONE_MAX_FLIGHTS, ANALYST_TOKENS_PER_ROUND, POP_DECAY,
   START_RES, FOOD_PER_PERSON, HOSPITAL_CAP, HOSPITAL_DISCHARGE, RELOCATE_COST, RELOCATE_MAX,
-} from './scenario';
-import { L, log } from './scoring';
-import { crosscheck, hasContradiction, isCorroborated } from './crosscheck';
+} from './scenario.js';
+import { L, log } from './scoring.js';
+import { crosscheck, hasContradiction, isCorroborated } from './crosscheck.js';
 
 export const reports = (s: TeamState): Report[] => R0.concat(s.xr);
 const vis = (s: TeamState) => reports(s).filter(r => r.rd <= s.round);

@@ -1,8 +1,8 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { apply } from '../shared/sim';
-import { total } from '../shared/scoring';
-import { newTeamState } from '../shared/sim';
-import type { Action, Actor, TeamState } from '../shared/types';
+import { apply } from '../shared/sim.js';
+import { total } from '../shared/scoring.js';
+import { newTeamState } from '../shared/sim.js';
+import type { Action, Actor, TeamState } from '../shared/types.js';
 import {
   type ServerDeps,
   type Principal,
@@ -11,7 +11,7 @@ import {
   processDueArrivals,
   handleAuthoritativeAction,
   handleSystemArrive,
-} from './actionHandler';
+} from './actionHandler.js';
 
 let cachedAdmin: SupabaseClient | null = null;
 

@@ -1,4 +1,4 @@
-import type { Barangay, Report, UnitType } from './types';
+import type { Barangay, Report, UnitType } from './types.js';
 export const B: Barangay[] = [
   { id: 'A', n: 'Sta. Lucia', x: 210, y: 170, pop: 140, fr: 1 }, { id: 'B', n: 'San Roque', x: 430, y: 130, pop: 200, fr: 2 },
   { id: 'C', n: 'Bagong Silang', x: 650, y: 235, pop: 90, fr: 3 }, { id: 'D', n: 'Pulo', x: 300, y: 345, pop: 160, fr: 2 },

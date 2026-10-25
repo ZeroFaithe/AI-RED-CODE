@@ -1,5 +1,5 @@
-import { getAdminClient, createSupabaseServerDeps } from '../server/supabaseServer';
-import { handleAiRequest } from '../server/aiHandler';
+import { getAdminClient, createSupabaseServerDeps } from '../server/supabaseServer.js';
+import { handleAiRequest } from '../server/aiHandler.js';
 
 function parseBody(body: any): any {
   if (typeof body === 'string') {

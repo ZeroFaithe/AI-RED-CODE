@@ -1,5 +1,5 @@
-import { getAdminClient, createSupabaseServerDeps } from '../server/supabaseServer';
-import { handleAuthoritativeAction, type ActionRequest } from '../server/actionHandler';
+import { getAdminClient, createSupabaseServerDeps } from '../server/supabaseServer.js';
+import { handleAuthoritativeAction, type ActionRequest } from '../server/actionHandler.js';
 
 function parseBody(body: any): any {
   if (typeof body === 'string') {

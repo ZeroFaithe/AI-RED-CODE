@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
-import { getAdminClient } from '../server/supabaseServer.ts';
-import { verifyHostPasscode } from '../server/hostAuth.ts';
-import { newTeamState } from '../shared/sim.ts';
+import { getAdminClient } from '../server/supabaseServer.js';
+import { verifyHostPasscode } from '../server/hostAuth.js';
+import { newTeamState } from '../shared/sim.ts.js';
 
 function parseBody(body: any): any {
   if (typeof body === 'string') {

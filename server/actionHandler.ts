@@ -11,9 +11,9 @@
  * The storage and auth are injected (ServerDeps) so this file has no Supabase dependency and is unit-tested.
  * See SUPABASE_CLIENT_GUIDE.md for the Supabase implementation of ServerDeps.
  */
-import { apply } from '../shared/sim';
-import { total } from '../shared/scoring';
-import type { Action, Actor, TeamState } from '../shared/types';
+import { apply } from '../shared/sim.js';
+import { total } from '../shared/scoring.js';
+import type { Action, Actor, TeamState } from '../shared/types.js';
 
 export type Principal = { role: 'team'; sessionId: string; teamId: string } | { role: 'host'; sessionId: string };
 export interface Versioned { state: TeamState; version: number }

@@ -1,4 +1,4 @@
-import { getAdminClient } from '../server/supabaseServer';
+import { getAdminClient } from '../server/supabaseServer.js';
 
 function parseBody(body: any): any {
   if (typeof body === 'string') {

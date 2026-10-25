@@ -8,8 +8,8 @@
  * Keys are NEVER exposed to the frontend.
  */
 
-import { generateRec } from '../shared/sim';
-import type { Rec, TeamState } from '../shared/types';
+import { generateRec } from '../shared/sim.js';
+import type { Rec, TeamState } from '../shared/types.js';
 
 interface AiRequestBody {
   state: TeamState;

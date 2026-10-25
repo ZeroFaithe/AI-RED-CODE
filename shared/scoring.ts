@@ -1,4 +1,4 @@
-import type { Cat, TeamState } from './types';
+import type { Cat, TeamState } from './types.js';
 export const CAPS: Record<Cat, number> = { lives: 30, res: 20, ver: 25, com: 15, prm: 10 };
 export const CN: Record<Cat, string> = { lives: 'Lives protected', res: 'Resource allocation', ver: 'Source verification', com: 'Communication & ethics', prm: 'Prompt quality' };
 export function log(s: TeamState, t: string) { s.log.push({ rd: s.round, t }); }

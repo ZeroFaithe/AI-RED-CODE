@@ -11,8 +11,8 @@
  * Social always counts as circular (same origin chain), so it NEVER qualifies alone.
  */
 
-import type { CheckChannel, CrossCheckResult, Report } from './types';
-import { STALE_OFFICIAL_SERIES } from './scenario';
+import type { CheckChannel, CrossCheckResult, Report } from './types.js';
+import { STALE_OFFICIAL_SERIES } from './scenario.js';
 
 const LABELS: Record<CheckChannel, string> = {
   official: '📋 Official (PAGASA / MDRRMO / LGU hotline)',
