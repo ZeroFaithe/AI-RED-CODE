@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import MapCanvas, { HQ, type Move } from './map/MapCanvas';
-import { Analyst, Board, Debrief, Host, Reports, Score, Shelters, type D } from './panels/Panels';
+import { Analyst, Board, Debrief, Host, Reports, Score, type D } from './panels/Panels';
 import { Glossary, Legend, Tutorial, coachText } from './panels/Help';
 import { LandingPage, JoinPage, HostPage, HostLeaderboard } from './panels/MainMenu';
 import {
   type ServerRoom,
+  type RoomTeam,
+  isRemote,
   saveRoom,
   getRoom,
   broadcast,
@@ -13,6 +15,7 @@ import {
 import { B, COST, RT, DEPOT_FUEL, DEPOT_FOOD, RESUPPLY_FUEL, RESUPPLY_FOOD } from '../shared/scenario';
 import { apply, flooded, newTeamState } from '../shared/sim';
 import { total } from '../shared/scoring';
+import type { Row } from '../shared/demoBoard';
 import type { Action, Actor, TeamState } from '../shared/types';
 import './styles.css';
 import './menu.css';
@@ -43,6 +46,7 @@ export default function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('menu');
   const [currentRoom, setCurrentRoom] = useState<ServerRoom | null>(null);
   const [myTeam, setMyTeam] = useState<{ id: string; name: string } | null>(null);
+  const [liveTeams, setLiveTeams] = useState<RoomTeam[] | null>(null);
 
   const [s, setS] = useState(load);
   const [tab, setTab] = useState('rep');
@@ -129,7 +133,7 @@ export default function App() {
       if (a.type === 'advance') setT(120);
       if (a.type === 'approve') launch();
       if (a.type === 'resupply') {
-        say('Emergency resupply requested! Arrives next round (one round later if the bridge is out).');
+        say('Emergency resupply requested! Arrives at the start of next round (if bridge is open).');
       }
     }
     return ok;
@@ -182,6 +186,7 @@ export default function App() {
         savedCount: s.saved,
         wasteCount: s.st.waste,
         reportsChecked: s.st.vOK + s.st.caught,
+        status: s.finished ? 'finished' : 'in_mission',
       });
       broadcast({ type: 'ROOM_UPDATE', room });
     }
@@ -212,6 +217,16 @@ export default function App() {
     }
   }, [viewMode, currentRoom, myTeam]);
 
+  // Live roster for the real leaderboard (kept out of the score effect's deps to avoid feedback loops)
+  const roomCode = currentRoom?.code;
+  useEffect(() => {
+    if (viewMode !== 'player_game' || !roomCode) return;
+    setLiveTeams(getRoom(roomCode)?.teams ?? null);
+    return subscribeToSync(m => {
+      if (m.type === 'ROOM_UPDATE' && m.room.code.toUpperCase() === roomCode.toUpperCase()) setLiveTeams(m.room.teams);
+    });
+  }, [viewMode, roomCode]);
+
   useEffect(() => {
     if (viewMode !== 'player_game') return;
     const i = setInterval(() => {
@@ -228,12 +243,21 @@ export default function App() {
   });
 
   const sc = total(s), b = sel ? B.find(x => x.id === sel) : null, [ct, cb] = coachText(s), pu = pend ? s.units.find(u => u.id === pend.unit)! : null;
+  const rows: Row[] | undefined =
+    isRemote() && liveTeams && myTeam
+      ? liveTeams
+          .map(x => ({ n: x.id === myTeam.id ? `${x.name} (you)` : x.name, s: Math.round(x.id === myTeam.id ? sc.all : x.score), you: x.id === myTeam.id, r: 0 }))
+          .sort((a, b) => b.s - a.s)
+          .map((x, i) => ({ ...x, r: i + 1 }))
+      : undefined;
+  // In a live room the facilitator controls belong to the host's dashboard, not to students.
+  const tabs = isRemote() && currentRoom ? TABS.filter(([k]) => k !== 'host') : TABS;
   const closeTut = () => { localStorage.setItem(SEEN, '1'); setTut(false); };
 
   const UI: Record<string, [string, string, string]> = {
-    boat: ['🚤', 'Rescue Boat', 'Carries 40 people · uses 10 fuel + 4 food'],
-    amb: ['🚑', 'Ambulance', 'Carries 20 · uses 6 fuel + 1 medic · goes to the hospital first · no broken bridges'],
-    drone: ['🛰️', 'Scout Drone', `Reveals one town · uses 6 fuel · ${s.droneFlights}/3 flights left${s.round >= 5 ? ' (Grounded)' : ''}`],
+    boat: ['🚤', 'Rescue Boat', 'Carries 40 people · uses 12 fuel + 6 food'],
+    amb: ['🚑', 'Ambulance', 'Carries 20 · uses 8 fuel + 1 medic · no broken bridges'],
+    drone: ['🛰️', 'Scout Drone', `Reveals one town · uses 8 fuel · ${s.droneFlights}/3 flights left${s.round >= 5 ? ' (Grounded)' : ''}`],
   };
 
   if (viewMode === 'menu') {
@@ -401,11 +425,11 @@ export default function App() {
             borderColor: '#b45309',
             fontSize: '12px',
           }}
-          title={`One-time emergency resupply: +${RESUPPLY_FUEL} fuel, +${RESUPPLY_FOOD} food at next round start. Arrives one round late if the bridge is out.`}
+          title={`One-time emergency resupply: +${RESUPPLY_FUEL} fuel, +${RESUPPLY_FOOD} food at next round start. Fails if bridge is out!`}
           disabled={s.supply.emergencyUsed}
           onClick={() => d({ type: 'resupply' })}
         >
-          🚁 Resupply {s.supply.emergencyUsed ? (s.supply.emergencyPending ? '⏳ En Route' : s.supply.bridgeBlockedAt ? '✅ Received (late)' : '✅ Received') : 'Request'}
+          🚁 Resupply {s.supply.emergencyUsed ? (s.supply.emergencyPending ? '⏳ En Route' : s.supply.bridgeBlockedAt ? '❌ Blocked' : '✅ Received') : 'Request'}
         </button>
 
         <button className="btn" onClick={() => setGl(true)}>❓ Guide</button>
@@ -467,7 +491,7 @@ export default function App() {
 
         <aside className="side">
           <nav className="tabs">
-            {TABS.map(([k, n]) => (
+            {tabs.map(([k, n]) => (
               <button key={k} className={'tab' + (tab === k ? ' on' : '')} onClick={() => setTab(k)}>
                 {n}
               </button>
@@ -475,10 +499,10 @@ export default function App() {
           </nav>
           <div className="pane">
             {s.finished && <Debrief s={s} />}
-            {tab === 'rep' && <><Shelters s={s} d={d} /><Reports s={s} d={d} /></>}
+            {tab === 'rep' && <Reports s={s} d={d} />}
             {tab === 'ai' && <Analyst s={s} d={d} />}
             {tab === 'sco' && <Score s={s} />}
-            {tab === 'brd' && <Board s={s} t={t} />}
+            {tab === 'brd' && <Board s={s} t={t} rows={rows} />}
             {tab === 'host' && <Host s={s} d={d} paused={paused} setPaused={setPaused} />}
           </div>
         </aside>

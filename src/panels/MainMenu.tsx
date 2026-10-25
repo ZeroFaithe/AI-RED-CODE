@@ -6,6 +6,8 @@ import {
   createNewRoom,
   saveRoom,
   getRoom,
+  fetchRoom,
+  isRemote,
   broadcast,
   subscribeToSync,
   PRESET_BOT_NAMES,
@@ -212,7 +214,10 @@ export function JoinPage({ onBack, onGameStart }: JoinPageProps) {
     return () => unsubscribe();
   }, [activeRoom, myTeamId, teamName, onGameStart]);
 
-  const handleJoin = () => {
+  const [connecting, setConnecting] = useState(false);
+
+  const handleJoin = async () => {
+    if (connecting) return;
     const trimmedCode = code.trim().toUpperCase();
     if (!trimmedCode) {
       setErrorMsg('Please enter a server room code.');
@@ -220,9 +225,17 @@ export function JoinPage({ onBack, onGameStart }: JoinPageProps) {
     }
     const cleanName = teamName.trim() || 'Responder Unit';
 
-    let room = getRoom(trimmedCode);
-    const teamId = 'team-' + Date.now();
+    setErrorMsg('');
+    setConnecting(true);
+    let room = await fetchRoom(trimmedCode);
+    setConnecting(false);
+    const teamId = 'team-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
     setMyTeamId(teamId);
+
+    if (!room && isRemote()) {
+      setErrorMsg('Room not found. Check the code, and make sure the host has created the room and is keeping their page open.');
+      return;
+    }
 
     if (!room) {
       // Create a local room representation if joining first or in test mode
@@ -276,7 +289,7 @@ export function JoinPage({ onBack, onGameStart }: JoinPageProps) {
       status: 'ready',
       joinedAt: Date.now(),
     };
-    room.teams.push(newTeam);
+    room = { ...room, teams: [...room.teams, newTeam] };
 
     saveRoom(room);
     setActiveRoom(room);
@@ -374,8 +387,8 @@ export function JoinPage({ onBack, onGameStart }: JoinPageProps) {
                 <button className="menu-btn secondary" onClick={onBack} style={{ flex: 1 }}>
                   Cancel
                 </button>
-                <button className="menu-btn primary" onClick={handleJoin} style={{ flex: 2 }}>
-                  Join Server →
+                <button className="menu-btn primary" onClick={handleJoin} disabled={connecting} style={{ flex: 2 }}>
+                  {connecting ? 'Connecting…' : 'Join Server →'}
                 </button>
               </div>
             </div>
