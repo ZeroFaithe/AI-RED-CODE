@@ -1,19 +1,10 @@
-import type { Barangay, Report, UnitType } from './types';
+import type { Barangay, Mode, Report, TeamState, UnitType } from './types';
 export const B: Barangay[] = [
   { id: 'A', n: 'Sta. Lucia', x: 210, y: 170, pop: 140, fr: 1 }, { id: 'B', n: 'San Roque', x: 430, y: 130, pop: 200, fr: 2 },
   { id: 'C', n: 'Bagong Silang', x: 650, y: 235, pop: 90, fr: 3 }, { id: 'D', n: 'Pulo', x: 300, y: 345, pop: 160, fr: 2 },
   { id: 'E', n: 'Masagana', x: 115, y: 340, pop: 110, fr: 99 }, { id: 'F', n: 'Dalig', x: 570, y: 385, pop: 130, fr: 4 }];
 export const EV = [{ id: 'E1', n: 'Evac Center 1', x: 80, y: 470, cap: 200 }, { id: 'E2', n: 'Evac Center 2', x: 770, y: 440, cap: 150 }];
-// ── Balance (v2): starting supplies and costs, tuned so careful play can reach most residents ──
-export const START_RES = { fuel: 160, food: 100, med: 4 };
-export const COST: Record<UnitType, Record<string, number>> = { boat: { fuel: 10, food: 4 }, amb: { fuel: 6, med: 1 }, drone: { fuel: 6 } };
-/** Food eaten per person evacuated (was 10%; now 5%). */
-export const FOOD_PER_PERSON = 0.05;
-// ── Shelters ──
-export const HOSPITAL_CAP = 60;        // ambulances deliver here first
-export const HOSPITAL_DISCHARGE = 30;  // patients discharged at each round start
-export const RELOCATE_COST = { fuel: 8, food: 4 };
-export const RELOCATE_MAX = 80;        // people moved per convoy, one convoy per center per round
+export const COST: Record<UnitType, Record<string, number>> = { boat: { fuel: 12, food: 6 }, amb: { fuel: 8, med: 1 }, drone: { fuel: 8 } };
 export const CAP = { boat: 40, amb: 20, drone: 0 };
 /** Only areas that actually flood count toward rescue effectiveness (Masagana never floods: its reports are false). */
 export const TOTPOP = B.filter(b => b.fr < 99).reduce((a, b) => a + b.pop, 0);
@@ -61,3 +52,42 @@ export const R0: Report[] = [
   r('R12', 4, 'E', 'f', 'Facebook comment thread', 'social', 40, 40, 0, 'G2', 'Same origin chain as R2 and R5.', 'Masagana still flooded, please share!'),
   r('R13', 5, 'D', 'd', 'Barangay SMS blast', 'resident', 70, 75, 0, 'G10', 'Auto-sent before the network failed. Stale.', 'Pulo water has receded, area safe.'),
   r('R14', 5, 'F', 'f', 'Amateur radio relay', 'resident', 20, 55, 1, 'G11', 'HAM relay, weak signal, the only channel working.', 'Dalig still stranded, about 130 people, cell towers down.')];
+
+
+// ── Rulesets ──────────────────────────────────────────────────────────────────
+export interface Rules {
+  label: string;
+  start: { fuel: number; food: number; med: number };
+  cost: Record<UnitType, Record<string, number>>;
+  cap: Record<UnitType, number>;
+  depotFuel: number; depotFood: number;
+  resupplyFuel: number; resupplyFood: number;
+  droneMax: number; tokens: number;
+  decay: number;
+  /** Multiplier applied to negative points outside "lives" (mistakes hurt less in guided mode). */
+  pen: number;
+}
+export const RULESETS: Record<Mode, Rules> = {
+  classic: {
+    label: 'Classic', start: { fuel: 120, food: 80, med: 4 }, cost: COST, cap: CAP,
+    depotFuel: DEPOT_FUEL, depotFood: DEPOT_FOOD, resupplyFuel: RESUPPLY_FUEL, resupplyFood: RESUPPLY_FOOD,
+    droneMax: DRONE_MAX_FLIGHTS, tokens: ANALYST_TOKENS_PER_ROUND, decay: POP_DECAY, pen: 1,
+  },
+  easy: {
+    label: 'Guided (easier)', start: { fuel: 220, food: 140, med: 6 },
+    cost: { boat: { fuel: 6, food: 3 }, amb: { fuel: 4, med: 1 }, drone: { fuel: 3 } },
+    cap: { boat: 60, amb: 30, drone: 0 },
+    depotFuel: 30, depotFood: 18, resupplyFuel: RESUPPLY_FUEL, resupplyFood: RESUPPLY_FOOD,
+    droneMax: 5, tokens: 5, decay: 0.08, pen: 0.5,
+  },
+};
+export const rules = (s: Pick<TeamState, 'mode'>): Rules => RULESETS[s.mode ?? 'classic'];
+
+// ── Facilitator guide: what is really happening each round ────────────────────
+export const GM_GUIDE: { watch: string; ask: string }[] = [
+  { watch: 'Teams are learning the screen. Sta. Lucia is the real flood; Masagana reports (R2, R5, R12) are one rumor copied around.', ask: 'Which reports came from a person or agency, and which are just posts shared by many people?' },
+  { watch: 'Rumor R5 repeats R2, so it is not a second source. San Roque and Pulo are real. Teams that only trust "many posts" will send boats to dry Masagana.', ask: 'If 10 people share the same post, is that 10 sources or 1?' },
+  { watch: 'Bridge to Bagong Silang is OUT; ambulances cannot go there and an emergency resupply now fails. The AI may cite a made-up report R77. Dalig looks safe only because advisory R9 is old.', ask: 'Can you find the AI source that does not exist? How would you know it was made up?' },
+  { watch: 'Dalig is flooding (R10) but R11 says "no incidents" - it is an old report from the same series as R9. Official hotline will say "no new record".', ask: 'Two official-looking reports disagree. Which is newer, and how can you tell?' },
+  { watch: 'Phones are down and the drone is grounded. R77 may appear again. Only ham radio (R14) works. Dalig is still stranded; Pulo is dry (R13 is old).', ask: 'When your tools fail, what do you do - guess, wait, or ask what you can still trust?' },
+];

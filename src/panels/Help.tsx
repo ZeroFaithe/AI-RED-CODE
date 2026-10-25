@@ -1,24 +1,32 @@
 import { useState } from 'react';
+import { B, rules } from '../../shared/scenario';
+import { flooded, support } from '../../shared/sim';
 import type { TeamState } from '../../shared/types';
 
-const STEPS = [
-  ['🌀', 'Your Mission: AI: CODE RED', 'A typhoon is flooding towns in Central Luzon. You lead a 10-team emergency command center. Save as many lives as you can across 5 rounds while managing fuel, food, and AI advice.'],
-  ['🛰️', 'Scout Drone & Flight Limits', 'The Scout Drone reveals the ground truth of any town, but you have ONLY 3 FLIGHTS for the entire game, and it CANNOT FLY in Round 5 due to storm interference. Choose where to recon wisely!'],
-  ['🔍', 'The Cross-check Desk', 'Save fuel and drone flights! In the Reports tab, use your 3 Analyst Time Tokens each round to cross-check claims against Official hotlines, News broadcasts, Social media searches, or Barangay phone calls. 2 independent sources confirm a flood without needing the drone!'],
-  ['⚠️', 'Beware Echo Chambers & Stale Advisories', 'Social media searches only echo original rumors—reposts are NOT independent evidence. Older advisories may also be stale. And if an independent check contradicts a claim, do not verify it blindly!'],
-  ['⏳', 'Cost of Delay & Supplies', 'Time costs lives: 15% of remaining people in flooded, unrescued towns are lost each round. Supply depots deliver +20 fuel and +12 food each round, and you have ONE emergency resupply convoy (+40 fuel, +25 food)—call it before the bridge breaks in Round 3!'],
-  ['🤖', 'Human-in-the-Loop AI', 'The AI Helper suggests rescue priorities, but watch out: it can fabricate fake report citations (like R77) or get tricked by social media reposts. Check citations and approve or reject every deployment yourself.'],
-  ['⭐', 'How You Win', 'Score up to 100 points: 30 for lives saved, 20 for resource & supply management, 25 for fact-checking & catching fake AI citations, 15 for honest public communication, and 10 for evidence-seeking AI prompts.']
-];
+type Mode = TeamState['mode'];
 
-export function Tutorial({ onClose }: { onClose: () => void }) {
+const steps = (mode: Mode): [string, string, string][] => {
+  const R = rules({ mode });
+  return [
+    ['🌀', 'What is happening', 'A typhoon is flooding towns in Central Luzon. You are the emergency command team. Your job: find out which towns are really flooded, and send boats to rescue people there. The game has 5 rounds.'],
+    ['🗺️', 'The map', `Gray towns are unknown. Blue circles are confirmed floods. Tap a town to see what we know. To rescue people: drag a unit from the bottom onto a town, or tap a unit and then a town. A rescue boat takes up to ${R.cap.boat} people to shelter.`],
+    ['📨', 'Reports can be wrong', 'The Reports tab lists messages about each town. Some are true, some are old, some are rumors. Many people sharing the SAME post is not proof - it is still just one source.'],
+    ['🔍', 'Check before you send', `Under each report, tap a source (Official, News, Barangay) to check it. You get ${R.tokens} checks each round. When 2 different sources agree, you will see a green "Probably TRUE" message - safe to send help.`],
+    ['🤖', 'The AI helper can make mistakes', 'The AI suggests where to go. It is fast but not always right - sometimes it quotes a report that does not exist (like "R77"). Tap each source it lists. You decide: approve, reject, or flag it.'],
+    ['⛽', 'Fuel, food and time', `Boats use fuel and food (${R.cost.boat.fuel} fuel + ${R.cost.boat.food} food each trip). Supplies arrive every round. Waiting costs lives, so do not freeze up - but do not send boats blindly either.`],
+    ['⭐', 'How you score', 'Points for people saved, using supplies well, checking sources, catching the AI\'s mistakes, and honest announcements. Your mistakes are explained in the Score tab so you can learn from them. Good luck!'],
+  ];
+};
+
+export function Tutorial({ onClose, mode }: { onClose: () => void; mode?: Mode }) {
+  const STEPS = steps(mode);
   const [i, setI] = useState(0), [e, t, p] = STEPS[i];
   return (
     <div className="ov">
       <div className="modal">
         <div className="big">{e}</div>
         <h2>{t}</h2>
-        <p style={{ lineHeight: 1.6, fontSize: '15px' }}>{p}</p>
+        <p style={{ lineHeight: 1.6, fontSize: '16px' }}>{p}</p>
         <div className="hint" style={{ margin: '12px 0' }}>Step {i + 1} of {STEPS.length}</div>
         <div>
           {i > 0 && <button className="btn" onClick={() => setI(i - 1)}>Back</button>}
@@ -27,7 +35,7 @@ export function Tutorial({ onClose }: { onClose: () => void }) {
           ) : (
             <button className="btn ok big" onClick={onClose}>Start the Mission</button>
           )}
-          <button className="btn" onClick={onClose} style={{ marginLeft: 6 }}>Skip Tutorial</button>
+          <button className="btn" onClick={onClose} style={{ marginLeft: 6 }}>Skip</button>
         </div>
       </div>
     </div>
@@ -35,25 +43,25 @@ export function Tutorial({ onClose }: { onClose: () => void }) {
 }
 
 const WORDS: [string, string][] = [
-  ['Scout Drone Limits', 'Only 3 flights per entire game; grounded in round 5 when storm waves and network failure disable drone operations.'],
-  ['Cross-check Desk', 'Free fact-checking tool using 3 Analyst Tokens per round. Checks reports across Official, News, Social, and Barangay channels.'],
-  ['Circular Reporting', 'When many social media posts repeat the same original rumor. Reposts look like consensus, but have only ONE origin and zero independent corroboration.'],
-  ['Cost of Delay', 'Flooded areas with unevacuated residents decline by 15% each round. Waiting too long or scouting everywhere instead of acting costs lives.'],
-  ['Depot Replenishment', 'Every round advance automatically delivers +20 fuel and +12 food to your command center.'],
-  ['Emergency Resupply', 'A one-time emergency convoy granting +40 fuel and +25 food. Arrives at the next round start, but fails if requested after the bridge breaks in Round 3.'],
-  ['Independent Corroboration', 'Agreement from at least two separate channels with different origins (e.g., Official bulletin + Barangay contact). This validates a claim without needing a drone flight.'],
-  ['AI Hallucination', 'When an AI model invents nonexistent evidence or report numbers (like citation R77). Spotting and flagging these scores top verification points.'],
-  ['Stale Data', 'Advisories from earlier rounds that were true hours ago but do not reflect current flooding. Official hotline will report "no new record".']
+  ['Barangay', 'The smallest local government unit in the Philippines - like a neighborhood. Its captain knows what is happening on the ground.'],
+  ['Source', 'Who a piece of information came from (a forecaster, a resident, a social media page).'],
+  ['Independent sources', 'Two sources that did NOT get their information from each other. Two independent sources agreeing is strong evidence.'],
+  ['Circular reporting', 'Many posts that all trace back to one original post. It looks like lots of people agree, but it is really ONE source repeated.'],
+  ['Stale / outdated', 'Information that used to be true but is now old. A "no flooding" report from 10 hours ago may be wrong now.'],
+  ['AI hallucination', 'When an AI confidently makes something up - like a report number that does not exist. Always check what the AI cites.'],
+  ['Fog of war', 'The gray shade on the map: you do not know the real situation there yet. Check reports or fly the scout drone.'],
+  ['Scout drone', 'Flies to one town and shows you the truth. You only have a few flights, so use them where you are least sure.'],
+  ['Cost of delay', 'People in flooded towns who are not rescued are lost each round. Acting too slowly costs lives.'],
 ];
 
 export function Glossary({ onClose }: { onClose: () => void }) {
   return (
     <div className="ov" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
-        <h2>AI: CODE RED — Reference Guide</h2>
+        <h2>📖 Words to know</h2>
         {WORDS.map(([w, d]) => (
           <p key={w} style={{ margin: '10px 0' }}>
-            <b style={{ color: '#ff6b5b' }}>{w}</b>: {d}
+            <b style={{ color: '#d6432f' }}>{w}</b>: {d}
           </p>
         ))}
         <button className="btn pri big" onClick={onClose} style={{ marginTop: 12 }}>Got it</button>
@@ -62,29 +70,62 @@ export function Glossary({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function Legend() {
+export function Legend({ mode }: { mode?: Mode }) {
+  const R = rules({ mode });
   return (
     <div className="legend">
-      <div>🚤 <b>Rescue Boat:</b> carries up to 40 people (10 fuel, 4 food)</div>
-      <div>🚑 <b>Ambulance:</b> carries up to 20 (6 fuel, 1 medic, delivers to the hospital first, blocked by broken bridge)</div>
-      <div>🛰️ <b>Scout Drone:</b> reveals one town (6 fuel, max 3 flights, disabled Rd 5)</div>
-      <div>🔍 <b>Cross-check Desk:</b> 3 tokens/rd to verify claims cheaply</div>
-      <div>⬜ <b>Gray shade:</b> unobserved (fog of war)</div>
-      <div>🔵 <b>Blue circle:</b> confirmed flooding</div>
-      <div>⭕ <b>Dashed ring:</b> flood rumor (not yet confirmed)</div>
-      <div>🟦 <b>EVAC:</b> evacuation shelter (occupancy / capacity)</div>
+      <div>🚤 <b>Rescue boat:</b> takes up to {R.cap.boat} people ({R.cost.boat.fuel} fuel, {R.cost.boat.food} food)</div>
+      <div>🚑 <b>Ambulance:</b> takes up to {R.cap.amb} ({R.cost.amb.fuel} fuel, 1 medic). Cannot cross the broken bridge</div>
+      <div>🛰️ <b>Scout drone:</b> shows the truth about one town ({R.cost.drone.fuel} fuel, {R.droneMax} flights, not in Round 5)</div>
+      <div>⬜ <b>Gray shade:</b> we do not know yet</div>
+      <div>🔵 <b>Blue circle:</b> confirmed flood</div>
+      <div>⭕ <b>Dashed ring:</b> rumor of flooding (not confirmed)</div>
+      <div>🟦 <b>EVAC:</b> shelter (people inside / space)</div>
       <div>➕ <b>Hospital</b></div>
-      <div>🟥 <b>Bridge OUT:</b> road blocked from Round 3 onward</div>
+      <div>🟥 <b>Bridge OUT:</b> blocked from Round 3</div>
     </div>
   );
 }
 
-export function coachText(s: TeamState): [string, string] {
-  if (s.finished) return ['Mission Complete', 'Open the Score tab to see why you earned each point and debrief your decisions.'];
-  if (s.round >= 5 && s.droneFlights > 0) return ['Round 5: Drone Grounded', 'Severe weather and network blackout have grounded the Scout Drone. Rely on HAM radio (R14) and verified reports!'];
-  if (s.droneFlights <= 0) return ['Scout Drone Out of Flights', 'You have used all 3 drone flights. Use the Cross-check Desk in Reports to corroborate reports with 2 independent channels before deploying!'];
-  if (Object.keys(s.crossChecks).length === 0) return ['Step 1: Use the Cross-check Desk', 'Open the Reports tab. Click "Official" or "Barangay" on a report to cross-check it without spending fuel or drone flights.'];
-  if (s.ai.length === 0) return ['Step 2: Consult the AI Helper', 'Open the AI Helper tab. Ask an evidence-based question, then check each cited report to catch hallucinations.'];
-  if (s.saved === 0) return ['Step 3: Rescue Stranded Residents', 'Drag a Rescue Boat onto a confirmed flooded town. Remember: unrescued towns lose 15% of people each round to delay!'];
-  return ['Monitor & Triage', 'Watch for circular social reposts and stale reports. Keep fuel ready and call emergency resupply before bridge failure if running low.'];
+const ROUND_NOTE = [
+  '',
+  '',
+  'Round 3: the bridge to Bagong Silang is OUT. If the AI quotes a report you cannot find, it made it up.',
+  'Round 4: two "official" reports about Dalig disagree. Check which one is newer.',
+  'Round 5: phones are down and the drone is grounded. Use the ham radio report (R14).',
+];
+
+/** "What should I do now?" checklist - replaces the old single-line coach box. */
+export function Goals({ s }: { s: TeamState }) {
+  if (s.finished) {
+    return (
+      <div className="coach">
+        <b>🏁 Mission complete!</b>
+        <div>Open the Score tab to see what you did well and what to improve.</div>
+      </div>
+    );
+  }
+  const checkedNow = Object.values(s.crossChecks).some(list => list.some(c => c.rd === s.round));
+  const sure = B.some(b => flooded(s, b) && s.pop[b.id] > 0 && support(s, b));
+  const rescued = s.led.some(l => l.rd === s.round && l.cat === 'lives' && l.pts > 0);
+  const asked = s.ai.some(r => r.rd === s.round);
+  const goals: [boolean, string][] = [
+    [checkedNow, 'Check a report (Reports tab → tap a source)'],
+    [sure, 'Find a town you are SURE is flooded (2 sources agree, or use the drone)'],
+    [rescued, 'Send a boat to that town'],
+    [asked, 'Ask the AI helper - then check its sources'],
+  ];
+  const next = goals.find(g => !g[0]);
+  return (
+    <div className="coach">
+      <b>Round {s.round} goals</b>
+      {goals.map(([done, text]) => (
+        <div key={text} style={{ opacity: done ? 0.55 : 1 }}>{done ? '✅' : '⬜'} {text}</div>
+      ))}
+      <div style={{ marginTop: 4, color: '#7a5600' }}>
+        {next ? <>👉 <b>Next:</b> {next[1]}</> : <>🎉 Great round! You can keep checking reports while you wait for the next round.</>}
+      </div>
+      {ROUND_NOTE[s.round - 1] && <div className="hint" style={{ marginTop: 4 }}>{ROUND_NOTE[s.round - 1]}</div>}
+    </div>
+  );
 }

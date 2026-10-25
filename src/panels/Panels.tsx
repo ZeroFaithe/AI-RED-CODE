@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { B, R0, DEPOT_FUEL, DEPOT_FOOD, RESUPPLY_FUEL, RESUPPLY_FOOD } from '../../shared/scenario';
+import { B, rules } from '../../shared/scenario';
 import { CAPS, CN, cats, total } from '../../shared/scoring';
 import { reports } from '../../shared/sim';
 import { board, type Row } from '../../shared/demoBoard';
@@ -22,129 +22,104 @@ const MARK: Record<string, [string, string]> = {
 };
 
 const CHANNELS: { id: CheckChannel; icon: string; label: string; desc: string }[] = [
-  { id: 'official', icon: '📋', label: 'Official', desc: 'PAGASA / MDRRMO / LGU hotline (accurate, but can be stale)' },
-  { id: 'news', icon: '📰', label: 'News', desc: 'Radio, TV, online (lags by one round)' },
-  { id: 'social', icon: '📱', label: 'Social Search', desc: 'Social media search (fast, echoes original: circular reporting!)' },
-  { id: 'barangay', icon: '📞', label: 'Barangay Call', desc: 'Direct phone call to captain (reliable, down in round 5)' },
+  { id: 'official', icon: '📋', label: 'Official', desc: 'PAGASA / MDRRMO / LGU hotline - accurate, but can be out of date' },
+  { id: 'barangay', icon: '📞', label: 'Call barangay', desc: 'Phone the barangay captain - very reliable, but phones are down in Round 5' },
+  { id: 'news', icon: '📰', label: 'News', desc: 'Radio, TV, online - always one round behind' },
+  { id: 'social', icon: '📱', label: 'Social media', desc: 'Fast, but copies of one post - NOT proof' },
 ];
+
+type Verdict = { cls: string; text: string };
+function verdict(s: TeamState, r: { id: string; age: number }): Verdict {
+  const checks = s.crossChecks[r.id] ?? [];
+  if (isCorroborated(checks)) return { cls: 'good', text: '🟢 Probably TRUE - 2 independent sources agree. Safe to act on.' };
+  if (hasContradiction(checks)) return { cls: 'bad', text: '🔴 Probably FALSE or OUTDATED - a trusted source disagrees. Do not send units on this alone.' };
+  if (checks.length > 0 && checks.every(c => c.channel === 'social')) return { cls: 'warn', text: '🟠 Only social media says so. Many copies of one post are not proof - ask Official or the barangay.' };
+  if (checks.some(c => c.stale)) return { cls: 'warn', text: '🟠 The official record is old. This does not tell us what is happening now - try another source.' };
+  if (checks.length > 0) return { cls: 'neutral', text: '🟡 Some evidence, but not enough. Check one more source.' };
+  if (r.age >= 480) return { cls: 'warn', text: '🟠 This report is many hours old and may no longer be true. Check it before acting.' };
+  return { cls: 'neutral', text: '⚪ Not checked yet. Tap a source below to check it.' };
+}
 
 export function Reports({ s, d }: { s: TeamState; d: D }) {
   const all = reports(s).filter(r => r.rd <= s.round);
+  const max = rules(s).tokens;
   return (
     <div>
       <div className="intro">
-        <b>📨 Incident Reports & Cross-check Desk.</b>
-        <div>Field reports can be outdated, copied, or false. Use your <b>3 analyst time tokens</b> each round to check reports against official, news, social, or local contacts before marking them or deploying units.</div>
+        <b>📨 Reports</b>
+        <div>Messages about the flood. Some are true, some are old, some are rumors. Check a report <b>before</b> you send a boat.</div>
         <div style={{ marginTop: 4, fontWeight: 700, color: s.analystTokens > 0 ? '#1e9e5a' : '#c0392b' }}>
-          ⏱️ Investigation points remaining this round: {s.analystTokens} of 3
+          🔍 Checks left this round: {s.analystTokens} of {max} {s.analystTokens === 0 && '(you get more next round)'}
         </div>
+        <div className="hint">Most reliable: 📋 Official and 📞 Barangay. 📱 Social media only repeats what others posted.</div>
       </div>
 
       {all.slice().reverse().map(r => {
         const m = s.marks[r.id] ?? 'unverified';
         const same = all.filter(q => q.g === r.g && q.id !== r.id);
         const checks = s.crossChecks[r.id] ?? [];
-        const corroborated = isCorroborated(checks);
-        const contradicts = hasContradiction(checks);
+        const v = verdict(s, r);
 
         return (
           <div key={r.id} className={'card' + (r.rd === s.round ? ' new' : '')}>
             <div>
               <span className="tag">{r.id}</span>
               <span className={'tag ' + MARK[m][1]}>{MARK[m][0]}</span>
-              {r.rd === s.round && <span className="tag w">NEW THIS ROUND</span>}
-              {r.age >= 480 && <span className="tag w">⏳ OLD NEWS (STALE)</span>}
+              {r.rd === s.round && <span className="tag w">NEW</span>}
             </div>
 
-            <p style={{ margin: '6px 0', fontSize: '14px', fontWeight: 600 }}>“{r.tx}”</p>
+            <p style={{ margin: '6px 0', fontSize: '15px', fontWeight: 600 }}>“{r.tx}”</p>
             <div style={{ fontSize: '13px' }}>
-              <b>Who said it:</b> {r.src}<br />
-              <b>About:</b> {nm(r.b)} · claims area is <b>{r.cl === 'f' ? 'flooded' : 'dry'}</b><br />
-              <b>How old:</b> {ago(r.age)} · <b>Origin chain:</b> {r.g}
+              <b>From:</b> {r.src} · <b>About:</b> {nm(r.b)} ({r.cl === 'f' ? 'says it is flooded' : 'says it is dry'}) · <b>Age:</b> {ago(r.age)}
             </div>
 
-            <div className="hint" style={{ marginTop: 4 }}>Reported confidence: {r.cf}%</div>
-            <div className="meter"><i style={{ width: r.cf + '%' }} /></div>
-            <div className="hint">Source provenance: {r.pv}</div>
+            <div className={'verdict ' + v.cls}>{v.text}</div>
 
             {same.length > 0 && (
               <div className="warn">
-                ⚠️ <b>Circular origin warning:</b> Shares origin with {same.map(q => q.id).join(', ')}. These are duplicate reshares of one claim, NOT independent evidence.
+                ⚠️ Same origin as {same.map(q => q.id).join(', ')}. These are copies of one claim - not extra proof.
               </div>
             )}
 
-            {/* ── Cross-check Desk ────────────────────────────────────────── */}
             <div className="desk">
-              <div className="desk-head">
-                <span>🔍 Cross-check Desk</span>
-                <span>Tokens left: {s.analystTokens}/3</span>
-              </div>
-
+              <div className="desk-head"><span>🔍 Check this report</span><span>{s.analystTokens}/{max} left</span></div>
               <div className="desk-btns">
                 {CHANNELS.map(ch => {
                   const already = checks.some(c => c.channel === ch.id);
-                  const isBgRd5 = ch.id === 'barangay' && s.round >= 5;
                   return (
-                    <button
-                      key={ch.id}
-                      className="btn channel"
-                      disabled={s.analystTokens <= 0}
-                      title={ch.desc}
-                      onClick={() => d({ type: 'crosscheck', report: r.id, channel: ch.id })}
-                    >
-                      {ch.icon} {ch.label}{already ? ' ↺' : ''}{isBgRd5 ? ' (down)' : ''}
+                    <button key={ch.id} className="btn channel" disabled={s.analystTokens <= 0} title={ch.desc}
+                      onClick={() => d({ type: 'crosscheck', report: r.id, channel: ch.id })}>
+                      {ch.icon} {ch.label}{already ? ' ✓' : ''}
                     </button>
                   );
                 })}
               </div>
 
-              {corroborated && (
-                <div className="corrob-banner">
-                  ✅ <b>Corroborated by ≥ 2 independent channels!</b> This claim is verified with evidence — deploying here qualifies for verification points without a scout flight.
-                </div>
-              )}
-
-              {contradicts && (
-                <div className="contra-banner">
-                  ⚠️ <b>Contradictory evidence found!</b> An independent channel contradicted this claim. Marking it verified will be penalized.
-                </div>
-              )}
-
               {checks.map(c => (
-                <div
-                  key={c.channel}
-                  className={
-                    'check-card' +
-                    (c.circular ? ' circular' : c.stale ? ' stale' : c.cf < 40 ? ' contra' : c.independent ? ' supported' : '')
-                  }
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <b>{c.label}</b>
-                    <div>
-                      {c.circular && <span className="check-tag circ">CIRCULAR ECHO</span>}
-                      {c.stale && <span className="check-tag neutral">STALE ADVISORY</span>}
-                      {c.unavailable && <span className="check-tag bad">NETWORK DOWN</span>}
-                      {c.independent && !c.circular && c.cf >= 50 && <span className="check-tag good">INDEPENDENT</span>}
-                      {c.independent && !c.circular && c.cf < 40 && <span className="check-tag bad">CONTRADICTED</span>}
-                      <span className="hint">Conf: {c.cf}%</span>
-                    </div>
-                  </div>
+                <div key={c.channel}
+                  className={'check-card' + (c.circular ? ' circular' : c.stale ? ' stale' : c.cf < 40 ? ' contra' : c.independent ? ' supported' : '')}>
+                  <b>{c.label}</b>{' '}
+                  {c.circular && <span className="check-tag circ">COPY OF ONE POST</span>}
+                  {c.stale && <span className="check-tag neutral">OLD RECORD</span>}
+                  {c.unavailable && <span className="check-tag bad">PHONES DOWN</span>}
+                  {c.independent && !c.circular && c.cf >= 50 && <span className="check-tag good">SUPPORTS</span>}
+                  {c.independent && !c.circular && c.cf < 40 && !c.unavailable && <span className="check-tag bad">DISAGREES</span>}
                   <div style={{ marginTop: 4 }}>{c.summary}</div>
                 </div>
               ))}
             </div>
 
-            {/* ── Action Buttons ────────────────────────────────────────── */}
+            <details style={{ marginTop: 6 }}>
+              <summary className="hint" style={{ cursor: 'pointer' }}>More details</summary>
+              <div className="hint">Reported confidence: {r.cf}% · Origin group: {r.g}</div>
+              <div className="meter"><i style={{ width: r.cf + '%' }} /></div>
+              <div className="hint">{r.pv}</div>
+            </details>
+
             <div style={{ marginTop: 8 }}>
-              <Btn kind="ok" onClick={() => d({ type: 'mark', report: r.id, status: 'verified' })}>
-                ✔ Mark Verified (Looks True)
-              </Btn>
-              <Btn kind="no" onClick={() => d({ type: 'mark', report: r.id, status: 'contradicted' })}>
-                ✖ Mark False / Outdated
-              </Btn>
-              <Btn onClick={() => d({ type: 'mark', report: r.id, status: 'unverified' })}>
-                Reset Mark
-              </Btn>
+              <Btn kind="ok" onClick={() => d({ type: 'mark', report: r.id, status: 'verified' })}>✔ Mark as true</Btn>
+              <Btn kind="no" onClick={() => d({ type: 'mark', report: r.id, status: 'contradicted' })}>✖ Mark as false / old</Btn>
+              <Btn onClick={() => d({ type: 'mark', report: r.id, status: 'unverified' })}>Reset</Btn>
             </div>
           </div>
         );
@@ -154,71 +129,69 @@ export function Reports({ s, d }: { s: TeamState; d: D }) {
 }
 
 const ASKS = [
+  'Where should we send boats first? Cite your sources and how confident you are.',
   'Compare the sources: which have independent evidence and which are uncertain?',
   'Which claims could be old or contradicted, and what is the evidence?',
-  'Where should we send boats first, and how confident are you? Cite your sources.',
 ];
 
 export function Analyst({ s, d }: { s: TeamState; d: D }) {
   const [p, setP] = useState(''), [chk, setChk] = useState<Record<string, boolean>>({});
+  const checkAll = (id: string, cites: string[]) => setChk(prev => ({ ...prev, ...Object.fromEntries(cites.map(c => [id + c, true])) }));
   return (
     <div>
       <div className="intro">
-        <b>🤖 AI Helper.</b> It reads the incident feed and recommends rescue priorities. It can hallucinate fake report numbers and can be misled by circular social media reposts. <b>You</b> approve or reject every deployment.
+        <b>🤖 AI Helper</b>
+        <div>Ask the AI where to send help. It is fast, but it can <b>make things up</b> or be fooled by copied posts. <b>You</b> decide: check its sources, then approve or reject.</div>
       </div>
-      <b>Ask an evidence-based question</b> <span className="hint">(asking for evidence, confidence, and timestamps earns Smart AI points)</span>
-      <div>{ASKS.map(a => <Btn key={a} onClick={() => setP(a)}>{a.slice(0, 38)}…</Btn>)}</div>
-      <textarea
-        value={p}
-        onChange={e => setP(e.target.value)}
-        rows={3}
-        style={{ width: '100%', marginTop: 6 }}
-        placeholder="Type your question for the AI Helper (e.g., 'Compare sources for Sta. Lucia, check confidence and timestamps')"
-      />
-      <Btn kind="ok" onClick={() => { if (d({ type: 'ask', prompt: p })) setP(''); }}>
-        Ask the AI Helper
-      </Btn>
+
+      <b>Tap a question to ask the AI</b>
+      <div>{ASKS.map(a => <Btn key={a} onClick={() => d({ type: 'ask', prompt: a })}>{a}</Btn>)}</div>
+      <details style={{ marginTop: 6 }}>
+        <summary className="hint" style={{ cursor: 'pointer' }}>Or write your own question</summary>
+        <textarea value={p} onChange={e => setP(e.target.value)} rows={3} style={{ width: '100%', marginTop: 6 }}
+          placeholder="Tip: ask for sources, timestamps and how sure it is" />
+        <Btn kind="ok" onClick={() => { if (d({ type: 'ask', prompt: p })) setP(''); }}>Ask</Btn>
+      </details>
+
+      {s.ai.length === 0 && <div className="hint" style={{ marginTop: 8 }}>No answers yet. Tap a question above.</div>}
 
       {s.ai.slice().reverse().map(r => (
         <div key={r.id} className="card">
-          <b>AI plan {r.id}</b> <span className="tag">{r.st === 'pending' ? 'waiting for your decision' : r.st}</span>
+          <b>AI plan {r.id}</b> <span className="tag">{r.st === 'pending' ? 'waiting for YOUR decision' : r.st}</span>
           <p style={{ margin: '6px 0' }}>{r.txt}</p>
           {r.unc && <div className="warn"><b>Why it might be wrong:</b> {r.unc}</div>}
           {r.cites.length > 0 && (
             <div style={{ marginTop: 6 }}>
-              <b>Sources cited:</b> <span className="hint">(tap to verify each citation)</span>
-              <div>{r.cites.map(c => <Btn key={c} onClick={() => setChk({ ...chk, [r.id + c]: true })}>{c}</Btn>)}</div>
+              <b>Sources it used:</b> <span className="hint">(tap to check that each one is real)</span>
+              <div>
+                {r.cites.map(c => <Btn key={c} onClick={() => setChk({ ...chk, [r.id + c]: true })}>{c}</Btn>)}
+                <Btn kind="pri" onClick={() => checkAll(r.id, r.cites)}>Check all</Btn>
+              </div>
             </div>
           )}
           {r.cites.filter(c => chk[r.id + c]).map(c => {
             const x = reports(s).find(q => q.id === c);
             return (
               <div key={c} className={x ? 'hint' : 'warn'}>
-                {x ? `${c}: ${x.src}, about ${nm(x.b)} (cf ${x.cf}%)` : `⚠️ ${c}: FABRICATED CITATION! This report does not exist in your feed. The AI hallucinated it!`}
+                {x ? `✔ ${c} is real: ${x.src}, about ${nm(x.b)}` : `⚠️ ${c} does NOT exist in your reports. The AI made it up!`}
               </div>
             );
           })}
           {r.st === 'pending' && (
             <div style={{ marginTop: 8 }}>
-              <Btn kind="ok" onClick={() => d({ type: 'approve', rec: r.id })}>
-                ✅ Approve and send a boat
-              </Btn>
-              <Btn kind="no" onClick={() => d({ type: 'reject', rec: r.id })}>
-                ❌ Reject this recommendation
-              </Btn>
-              <Btn onClick={() => d({ type: 'flag', rec: r.id })}>
-                🚩 Flag made-up source (Hallucination)
-              </Btn>
+              <Btn kind="ok" onClick={() => d({ type: 'approve', rec: r.id })}>✅ Approve - send a boat</Btn>
+              <Btn kind="no" onClick={() => d({ type: 'reject', rec: r.id })}>❌ Reject</Btn>
+              <Btn onClick={() => d({ type: 'flag', rec: r.id })}>🚩 Report a made-up source</Btn>
             </div>
           )}
         </div>
       ))}
 
       <h4>📢 Public announcement <span className="hint">(once per round each)</span></h4>
-      <div className="hint">Residents trust your announcements. Broadcasting unverified rumors causes panic and loses ethical communication points.</div>
-      <Btn onClick={() => d({ type: 'advisory', k: 'v' })}>Announce only checked facts</Btn>
-      <Btn onClick={() => d({ type: 'advisory', k: 't' })}>Disclose AI assistance and uncertainty</Btn>
-      <Btn kind="no" onClick={() => d({ type: 'advisory', k: 'x' })}>Broadcast the AI claim as confirmed</Btn>
+      <div className="hint">People trust your announcements. Sharing unchecked rumors causes panic and loses points.</div>
+      <Btn kind="ok" onClick={() => d({ type: 'advisory', k: 'v' })}>Announce only facts we checked</Btn>
+      <Btn onClick={() => d({ type: 'advisory', k: 't' })}>Say that AI helped us and may be wrong</Btn>
+      <Btn kind="no" onClick={() => d({ type: 'advisory', k: 'x' })}>Announce the AI's claim as confirmed</Btn>
     </div>
   );
 }

@@ -844,3 +844,22 @@
   gap: 12px;
   justify-content: center;
 }
+
+/* ── Facilitator console additions ───────────────────────────────────────── */
+.gm-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px}
+.gm-tile{background:#121f33;border:1px solid #263c5e;border-radius:14px;padding:14px 16px}
+.gm-tile-value{font-size:28px;font-weight:900;line-height:1.1}
+.gm-tile-label{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8;margin-top:4px}
+.gm-tile-sub{font-size:12px;color:#64748b}
+.gm-card{background:#121f33;border:1px solid #263c5e;border-radius:14px;padding:14px 18px;margin-bottom:18px}
+.gm-h{margin:0 0 8px;font-size:16px}
+.gm-muted{color:#94a3b8;font-size:13px}
+.gm-attn{padding:7px 0;border-top:1px solid #1f3657;font-size:14px}
+.gm-attn:first-of-type{border-top:0}
+.gm-mini{background:#17263d;color:#cfe0f5;border:1px solid #2f4a73;border-radius:8px;padding:4px 10px;font-size:12px;font-weight:600;cursor:pointer;margin-left:8px}
+.gm-mini:hover{border-color:#38bdf8}
+.gm-row-sel{outline:2px solid #38bdf8;outline-offset:-2px;background:rgba(56,189,248,.08)}
+.gm-quick{display:block;width:100%;text-align:left;background:#0d1828;color:#cfe0f5;border:1px solid #263c5e;border-radius:8px;padding:6px 8px;margin-top:5px;font-size:12px;cursor:pointer}
+.gm-quick:hover{border-color:#38bdf8}
+.gm-flash{position:fixed;top:70px;left:50%;transform:translateX(-50%);background:#059669;color:#fff;padding:8px 18px;border-radius:99px;font-weight:700;z-index:60;box-shadow:0 4px 14px #0008}
+.leaderboard-table td,.leaderboard-table th{padding:12px 12px}

@@ -1,9 +1,6 @@
-import type { Action, Actor, Barangay, Rec, Report, Result, TeamState } from './types';
+import type { Action, Actor, Barangay, Mode, Rec, Report, Result, TeamState } from './types';
 import {
-  B, CAP, COST, EV, KW, R0, TOTPOP,
-  DEPOT_FUEL, DEPOT_FOOD, RESUPPLY_FUEL, RESUPPLY_FOOD,
-  DRONE_MAX_FLIGHTS, ANALYST_TOKENS_PER_ROUND, POP_DECAY,
-  START_RES, FOOD_PER_PERSON, HOSPITAL_CAP, HOSPITAL_DISCHARGE, RELOCATE_COST, RELOCATE_MAX,
+  B, EV, KW, R0, TOTPOP, rules,
 } from './scenario';
 import { L, log } from './scoring';
 import { crosscheck, hasContradiction, isCorroborated } from './crosscheck';
@@ -27,12 +24,9 @@ export const support = (s: TeamState, b: Barangay): boolean => {
 };
 
 const groups = (s: TeamState, b: Barangay) => new Set(vis(s).filter(r => r.b === b.id && r.cl === 'f').map(r => r.g)).size;
-/** Free shelter places for a unit type. Ambulances may also use the hospital. */
-export const freeSpace = (s: TeamState, ty: string): number =>
-  EV.reduce((a, e) => a + Math.max(0, e.cap - (s.ev[e.id] ?? 0)), 0) + (ty === 'amb' ? Math.max(0, HOSPITAL_CAP - (s.ev.H ?? 0)) : 0);
 const drone = (s: TeamState) => s.units.find(u => u.ty === 'drone')!;
 const opp = (s: TeamState, b: Barangay) => {
-  if (drone(s).st === 'idle' && s.res.fuel >= COST.drone.fuel && s.droneFlights > 0 && s.round < 5) return true;
+  if (drone(s).st === 'idle' && s.res.fuel >= rules(s).cost.drone.fuel && s.droneFlights > 0 && s.round < 5) return true;
   if (groups(s, b) >= 2) return true;
   // Cross-check opportunity: if tokens remain or any cross-check exists for this town
   if (s.analystTokens > 0) return true;
@@ -40,18 +34,19 @@ const opp = (s: TeamState, b: Barangay) => {
   return false;
 };
 
-export function newTeamState(teamId: string): TeamState {
+export function newTeamState(teamId: string, mode: Mode = 'classic'): TeamState {
+  const R = rules({ mode });
   const pop: Record<string, number> = {}; B.forEach(b => (pop[b.id] = b.pop));
   const u = (id: string, ty: 'boat' | 'amb' | 'drone') => ({ id, ty, st: 'idle' as const });
   return {
-    teamId, round: 1, finished: false, aiOff: false,
-    res: { ...START_RES },
-    pop, saved: 0, over: 0, ev: { E1: 0, E2: 0, H: 0 }, relocated: 0,
+    teamId, round: 1, finished: false, aiOff: false, mode,
+    res: { ...R.start },
+    pop, saved: 0, over: 0, ev: { E1: 0, E2: 0 },
     rev: {}, fr: {}, marks: {}, keys: {}, done: {}, led: [], log: [], ai: [], xr: [],
     units: [u('B1', 'boat'), u('B2', 'boat'), u('M1', 'amb'), u('M2', 'amb'), u('D1', 'drone')],
     st: { caught: 0, vOK: 0, vN: 0, unsup: 0, hall: 0, waste: 0, deps: 0, ok: 0 },
-    droneFlights: DRONE_MAX_FLIGHTS,
-    analystTokens: ANALYST_TOKENS_PER_ROUND,
+    droneFlights: R.droneMax,
+    analystTokens: R.tokens,
     crossChecks: {},
     supply: { emergencyUsed: false, emergencyPending: false },
   };
@@ -92,7 +87,7 @@ const fail = (s: TeamState, error: string): Result => ({ ok: false, error, state
 /** Authoritative reducer. Pure: returns a new state, never mutates the input. Idempotent per action id. */
 export function apply(s0: TeamState, a: Action, actor: Actor): Result {
   if (s0.done[a.id]) return { ok: true, state: s0, dup: true };
-  const hostOnly = a.type === 'advance' || a.type === 'inject';
+  const hostOnly = a.type === 'advance' || a.type === 'inject' || a.type === 'grant';
   if (hostOnly && actor.role !== 'host') return fail(s0, 'forbidden: host only');
   if (a.type === 'arrive' && actor.role !== 'system') return fail(s0, 'forbidden: system only');
   if (!hostOnly && a.type !== 'arrive' && !(actor.role === 'team' && actor.teamId === s0.teamId)) return fail(s0, 'forbidden: not your team');
@@ -109,14 +104,13 @@ function run(s: TeamState, a: Action): string | null {
       const u = s.units.find(x => x.id === a.unit), b = B.find(x => x.id === a.b);
       if (!u || !b || u.st !== 'idle') return 'unit unavailable';
       if (u.ty === 'amb' && b.id === 'C' && s.round >= 3) return 'road blocked: bridge out';
-      if (u.ty !== 'drone' && freeSpace(s, u.ty) <= 0) return 'All shelters are full. Relocate people out of an evacuation center first.';
       // Drone flight limits
       if (u.ty === 'drone') {
         if (s.round >= 5) return 'drone grounded: storm and network failure in round 5';
-        if (s.droneFlights <= 0) return 'no scout flights remaining (limit: ' + DRONE_MAX_FLIGHTS + ' per game)';
+        if (s.droneFlights <= 0) return 'no scout flights remaining (limit: ' + rules(s).droneMax + ' per game)';
         s.droneFlights--;
       }
-      const c = COST[u.ty]; for (const k in c) if ((s.res as Record<string, number>)[k] < c[k]) return 'insufficient ' + k;
+      const c = rules(s).cost[u.ty]; for (const k in c) if ((s.res as Record<string, number>)[k] < c[k]) return 'insufficient ' + k;
       const sup = support(s, b), op = opp(s, b);
       for (const k in c) (s.res as Record<string, number>)[k] -= c[k];
       u.st = 'out'; u.tg = b.id; u.dep = { b: b.id, src: a.src ?? 'manual', rid: a.rid, fake: a.fake, sup, opp: op, fuel: c.fuel };
@@ -129,12 +123,9 @@ function run(s: TeamState, a: Action): string | null {
       u.st = 'idle'; u.tg = undefined; s.rev[b.id] = s.round; if (u.ty === 'amb') s.res.med++;
       if (u.ty === 'drone') { log(s, `Recon at ${b.n}: ${fo ? 'FLOODED, ' + s.pop[b.id] + ' remaining' : 'DRY'}`); return null; }
       if (fo && s.pop[b.id] > 0) {
-        const n = Math.min(CAP[u.ty], s.pop[b.id], freeSpace(s, u.ty));
-        if (n <= 0) { s.st.waste += d.fuel; L(s, 'res', -2, 'Arrived but every shelter was full: trip wasted. Relocate people to make room.', ev); return null; }
-        s.pop[b.id] -= n; s.saved += n; s.st.ok++; let left = n;
-        if (u.ty === 'amb') { const k = Math.min(left, HOSPITAL_CAP - (s.ev.H ?? 0)); s.ev.H = (s.ev.H ?? 0) + k; left -= k; }
-        EV.slice().sort((p, q) => dist(p, b) - dist(q, b)).forEach(e => { const k = Math.min(left, e.cap - (s.ev[e.id] ?? 0)); s.ev[e.id] = (s.ev[e.id] ?? 0) + k; left -= k; });
-        s.over += left; s.res.food = Math.max(0, s.res.food - Math.ceil(n * FOOD_PER_PERSON));
+        const n = Math.min(rules(s).cap[u.ty], s.pop[b.id]); s.pop[b.id] -= n; s.saved += n; s.st.ok++; let left = n;
+        EV.slice().sort((p, q) => dist(p, b) - dist(q, b)).forEach(e => { const k = Math.min(left, e.cap - s.ev[e.id]); s.ev[e.id] += k; left -= k; });
+        s.over += left; s.res.food = Math.max(0, s.res.food - Math.ceil(n * 0.1));
         L(s, 'lives', 30 * n / TOTPOP, `${u.id} rescued ${n} people from ${b.n}`, ev); L(s, 'res', 2, 'Successful deployment, fuel put to use', ev);
         if (left > 0) L(s, 'res', -2, `${left} rescued people had no shelter space`, ev, 'ov' + b.id + s.round);
         if (d.sup) L(s, 'ver', 4, `Deployed after evidence (recon, verified report, or corroboration) at ${b.n}`, ev, 'vd' + b.id + s.round);
@@ -196,7 +187,7 @@ function run(s: TeamState, a: Action): string | null {
         else if (fo && sp) L(s, 'ver', -2, 'Rejected a recommendation that evidence supported', r.id, 'rj' + r.id);
         return null;
       }
-      const u = s.units.find(q => q.ty === 'boat' && q.st === 'idle' && s.res.fuel >= 12 && s.res.food >= 6); if (!u) return 'no available boat';
+      const u = s.units.find(q => q.ty === 'boat' && q.st === 'idle' && s.res.fuel >= rules(s).cost.boat.fuel && s.res.food >= rules(s).cost.boat.food); if (!u) return 'no available boat';
       if (r.fake) { s.st.unsup++; L(s, 'ver', -6, `Approved a recommendation with a fabricated citation (${r.fake}) that could be checked`, r.id, 'fk' + r.id); }
       r.st = 'approved'; log(s, `Team APPROVED ${r.id}`); return run(s, { id: a.id + '-d', teamId: s.teamId, type: 'deploy', unit: u.id, b: b.id, src: 'ai', rid: r.id, fake: !!r.fake });
     }
@@ -250,23 +241,12 @@ function run(s: TeamState, a: Action): string | null {
       }
       return null;
     }
-    case 'relocate': {
-      const c = EV.find(e => e.id === a.center); if (!c) return 'unknown evacuation center';
-      const used = s.ev[c.id] ?? 0, key = 'rl' + c.id + s.round;
-      if (s.keys[key]) return 'this center already had a relocation convoy this round';
-      if (used <= 0) return 'nobody to relocate from this center';
-      if (s.res.fuel < RELOCATE_COST.fuel || s.res.food < RELOCATE_COST.food) return 'not enough fuel or food for a relocation convoy';
-      const n = Math.min(RELOCATE_MAX, used); s.res.fuel -= RELOCATE_COST.fuel; s.res.food -= RELOCATE_COST.food; s.ev[c.id] = used - n; s.relocated += n;
-      const needed = used >= 0.7 * c.cap;
-      L(s, 'res', needed ? 1 : 0, needed ? `Relocated ${n} people from ${c.n} to the provincial shelter, freeing space for new rescues` : `Relocated ${n} people from ${c.n}, but it was not nearly full (no points)`, `Round ${s.round}`, key);
-      return null;
-    }
     case 'resupply': {
       if (s.supply.emergencyUsed) return 'emergency resupply already used this game';
       if (s.supply.emergencyPending) return 'emergency resupply already on its way';
       s.supply.emergencyPending = true;
       s.supply.emergencyUsed = true;
-      log(s, `Emergency resupply requested. It arrives at the start of the next round${s.round >= 3 ? ', but the broken bridge will hold it up for one extra round' : ''}.`);
+      log(s, `Emergency resupply requested — will arrive at the start of the next round${s.round >= 3 ? ' (may be delayed: bridge is out on route C)' : ''}.`);
       return null;
     }
     case 'advance': {
@@ -275,7 +255,7 @@ function run(s: TeamState, a: Action): string | null {
       // ── Population decay: flooded, unrescued towns lose 15% of remaining pop ──
       B.forEach(b => {
         if (flooded(s, b) && s.pop[b.id] > 0 && b.fr < 99) {
-          const lost = Math.round(s.pop[b.id] * POP_DECAY);
+          const lost = Math.round(s.pop[b.id] * rules(s).decay);
           if (lost > 0) {
             s.pop[b.id] = Math.max(0, s.pop[b.id] - lost);
             L(s, 'lives', -30 * lost / TOTPOP, `${b.n}: ${lost} people could not be reached this round — time costs lives`, `Round ${s.round} delay`, 'decay' + b.id + s.round);
@@ -284,12 +264,12 @@ function run(s: TeamState, a: Action): string | null {
         }
       });
 
-      if ((s.ev.H ?? 0) > 0) { const k = Math.min(s.ev.H, HOSPITAL_DISCHARGE); s.ev.H -= k; log(s, `🏥 ${k} patients were discharged from the hospital, freeing beds.`); }
       s.round++;
       s.aiOff = false;
 
       // ── Analyst tokens reset ──────────────────────────────────────────────
-      s.analystTokens = ANALYST_TOKENS_PER_ROUND;
+      const R = rules(s), DEPOT_FUEL = R.depotFuel, DEPOT_FOOD = R.depotFood, RESUPPLY_FUEL = R.resupplyFuel, RESUPPLY_FOOD = R.resupplyFood;
+      s.analystTokens = R.tokens;
 
       // ── Depot delivery (every round start) ────────────────────────────────
       s.res.fuel += DEPOT_FUEL;
@@ -297,20 +277,29 @@ function run(s: TeamState, a: Action): string | null {
       log(s, `🚚 Supply depot delivered +${DEPOT_FUEL} fuel and +${DEPOT_FOOD} food at the start of Round ${s.round}.`);
       L(s, 'res', 0, `Depot delivery: +${DEPOT_FUEL} fuel, +${DEPOT_FOOD} food`, `Round ${s.round} depot`);
 
-      // ── Emergency resupply (held up once by the broken bridge, then delivered) ──
+      // ── Emergency resupply ─────────────────────────────────────────────────
       if (s.supply.emergencyPending) {
-        if (s.round >= 3 && !s.supply.delayed) {
-          s.supply.delayed = true; s.supply.bridgeBlockedAt = s.round;
-          log(s, '⚠️ Emergency resupply delayed! The bridge is out, so the convoy is rerouted. It should arrive next round.');
+        s.supply.emergencyPending = false;
+        const bridgeOut = s.round >= 3;   // bridge is out from round 3
+        if (bridgeOut) {
+          // Supply route blocked — delivery delayed/failed
+          s.supply.bridgeBlockedAt = s.round;
+          log(s, `⚠️ Emergency resupply delayed! The bridge is out and the supply route is blocked. Convoy could not reach the command center this round.`);
+          L(s, 'res', -1, 'Emergency resupply blocked: bridge out. Request it earlier next game.', `Round ${s.round}`, 'eres' + s.round);
         } else {
-          s.supply.emergencyPending = false;
-          s.res.fuel += RESUPPLY_FUEL; s.res.food += RESUPPLY_FOOD;
+          s.res.fuel += RESUPPLY_FUEL;
+          s.res.food += RESUPPLY_FOOD;
           log(s, `🚁 Emergency resupply arrived: +${RESUPPLY_FUEL} fuel, +${RESUPPLY_FOOD} food.`);
           L(s, 'res', 2, `Emergency resupply received: +${RESUPPLY_FUEL} fuel, +${RESUPPLY_FOOD} food`, `Round ${s.round}`);
         }
       }
 
       log(s, `Round ${s.round} begins`); return null;
+    }
+    case 'grant': {
+      const f = Math.max(0, Math.min(200, Math.round(a.fuel))), o = Math.max(0, Math.min(200, Math.round(a.food)));
+      s.res.fuel += f; s.res.food += o;
+      log(s, `🎁 Facilitator sent supplies: +${f} fuel, +${o} food.`); return null;
     }
     case 'inject': {
       const n = 'X' + (s.xr.length + 1), base = { id: n, rd: s.round, age: 5, pv: 'Injected by the facilitator.' };

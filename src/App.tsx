@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import MapCanvas, { HQ, type Move } from './map/MapCanvas';
 import { Analyst, Board, Debrief, Host, Reports, Score, type D } from './panels/Panels';
-import { Glossary, Legend, Tutorial, coachText } from './panels/Help';
+import { Glossary, Goals, Legend, Tutorial } from './panels/Help';
 import { LandingPage, JoinPage, HostPage, HostLeaderboard } from './panels/MainMenu';
 import {
   type ServerRoom,
@@ -12,11 +12,11 @@ import {
   broadcast,
   subscribeToSync,
 } from './multiplayer/roomSync';
-import { B, COST, RT, DEPOT_FUEL, DEPOT_FOOD, RESUPPLY_FUEL, RESUPPLY_FOOD } from '../shared/scenario';
-import { apply, flooded, newTeamState } from '../shared/sim';
+import { B, RT, rules } from '../shared/scenario';
+import { apply, flooded, newTeamState, reports, support } from '../shared/sim';
 import { total } from '../shared/scoring';
 import type { Row } from '../shared/demoBoard';
-import type { Action, Actor, TeamState } from '../shared/types';
+import type { Action, Actor, Mode, TeamState } from '../shared/types';
 import './styles.css';
 import './menu.css';
 
@@ -39,8 +39,10 @@ const load = (): TeamState => {
       return s;
     }
   } catch { /* ignore */ }
-  return newTeamState(TEAM);
+  return newTeamState(TEAM, 'easy');
 };
+
+const DEFAULT_ROUND = 240;
 
 export default function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('menu');
@@ -53,7 +55,8 @@ export default function App() {
   const [sel, setSel] = useState<string | null>(null);
   const [pend, setPend] = useState<{ unit: string; b: string } | null>(null);
   const [msg, setMsg] = useState('');
-  const [t, setT] = useState(120);
+  const [t, setT] = useState(DEFAULT_ROUND);
+  const [notice, setNotice] = useState('');
   const [paused, setPaused] = useState(false);
   const [unit, setUnit] = useState<string | null>(null);
   const [tut, setTut] = useState(() => !localStorage.getItem(SEEN));
@@ -62,21 +65,19 @@ export default function App() {
 
   const sr = useRef(s), moves = useRef<Move[]>([]);
   sr.current = s;
+  const roundSecs = currentRoom?.roundTime || DEFAULT_ROUND;
+  const autoAdvance = currentRoom?.autoAdvance !== false;
+  const R = rules(s);
 
   const say = (m: string) => { setMsg(m); setTimeout(() => setMsg(''), 4500); };
 
-  const resetGame = (teamId = TEAM, roundDuration = 120) => {
-    const fresh = newTeamState(teamId);
-    fresh.round = 1;
-    fresh.finished = false;
-    fresh.analystTokens = 3; // Investigation points 3/3
-    fresh.droneFlights = 3;
-    fresh.saved = 0;
-    fresh.units.forEach(u => { u.st = 'idle'; });
+  const resetGame = (teamId = TEAM, roundDuration = DEFAULT_ROUND, mode: Mode = 'easy') => {
+    const fresh = newTeamState(teamId, mode);
     moves.current = [];
     sr.current = fresh;
     setS(fresh);
     setT(roundDuration);
+    setNotice('');
     setPaused(false);
     setSel(null);
     setPend(null);
@@ -130,10 +131,10 @@ export default function App() {
     const currentTeamId = sr.current.teamId;
     const ok = run(a, w === 'host' ? { role: 'host' } : { role: 'team', teamId: currentTeamId });
     if (ok) {
-      if (a.type === 'advance') setT(120);
+      if (a.type === 'advance') setT(roundSecs);
       if (a.type === 'approve') launch();
       if (a.type === 'resupply') {
-        say('Emergency resupply requested! Arrives at the start of next round (if bridge is open).');
+        say('Extra supplies requested! They arrive at the start of next round (if the bridge is open).');
       }
     }
     return ok;
@@ -144,7 +145,7 @@ export default function App() {
     if (!u || u.st !== 'idle') return say('That unit is away on a mission.');
     if (u.ty === 'drone') {
       if (sr.current.droneFlights <= 0) {
-        return say('No scout flights remaining! Limit: 3 per game. Use the Cross-check Desk in Reports instead.');
+        return say(`No scout flights left (limit ${R.droneMax} per game). Check reports in the Reports tab instead.`);
       }
       if (sr.current.round >= 5) {
         return say('Scout drone grounded in Round 5 due to storm blackout!');
@@ -187,6 +188,18 @@ export default function App() {
         wasteCount: s.st.waste,
         reportsChecked: s.st.vOK + s.st.caught,
         status: s.finished ? 'finished' : 'in_mission',
+        info: {
+          round: s.round,
+          fuel: s.res.fuel,
+          food: s.res.food,
+          flights: s.droneFlights,
+          tokens: s.analystTokens,
+          checks: Object.values(s.crossChecks).reduce((a, l) => a + l.length, 0),
+          caughtFake: s.st.hall > 0,
+          fellForFake: Object.keys(s.keys).some(k => k.startsWith('fk')),
+          falseAlarms: s.led.filter(l => l.why.startsWith('False alarm')).length,
+          lastEvent: s.log.length ? s.log[s.log.length - 1].t : '',
+        },
       });
       broadcast({ type: 'ROOM_UPDATE', room });
     }
@@ -197,17 +210,35 @@ export default function App() {
     if (viewMode === 'player_game' && currentRoom) {
       const unsub = subscribeToSync(msg => {
         if (msg.type === 'RESET_GAME' && currentRoom && msg.roomCode.toUpperCase() === currentRoom.code.toUpperCase()) {
-          resetGame(myTeam?.id || TEAM, currentRoom.roundTime || 120);
+          resetGame(myTeam?.id || TEAM, currentRoom.roundTime || DEFAULT_ROUND, currentRoom.difficulty ?? 'easy');
         } else if (msg.type === 'HOST_ACTION' && msg.roomCode.toUpperCase() === currentRoom.code.toUpperCase()) {
           if (msg.action === 'advance') {
             run({ type: 'advance' }, { role: 'host' });
-            setT(currentRoom.roundTime || 120);
+            setT(currentRoom.roundTime || DEFAULT_ROUND);
+            setNotice('⏭ The facilitator started the next round.');
+          } else if (msg.action === 'announce' && msg.payload) {
+            try {
+              const p = JSON.parse(msg.payload) as { to: string; text: string };
+              if (p.to === 'all' || p.to === myTeam?.id) setNotice('📢 ' + p.text);
+            } catch { /* ignore */ }
+          } else if (msg.action === 'addtime') {
+            setT(v => v + (Number(msg.payload) || 60));
+            setNotice('⏱ The facilitator added more time.');
+          } else if (msg.action === 'grant' && msg.payload) {
+            try {
+              const p = JSON.parse(msg.payload) as { to: string; fuel: number; food: number };
+              if (p.to === 'all' || p.to === myTeam?.id) {
+                run({ type: 'grant', fuel: p.fuel, food: p.food }, { role: 'host' });
+                setNotice(`🎁 The facilitator sent supplies: +${p.fuel} fuel, +${p.food} food.`);
+              }
+            } catch { /* ignore */ }
           } else if (msg.action === 'pause') {
             setPaused(true);
           } else if (msg.action === 'resume') {
             setPaused(false);
           } else if (msg.action === 'inject' && msg.payload) {
             run({ type: 'inject', k: msg.payload }, { role: 'host' });
+            setNotice(msg.payload === 'o' ? '📡 The AI helper lost its connection. Rely on your own checks.' : '🚨 Breaking news from the facilitator! Check the Reports tab.');
           }
         } else if (msg.type === 'ROOM_CLOSED' && msg.roomCode.toUpperCase() === currentRoom.code.toUpperCase()) {
           say('Server room closed by host.');
@@ -230,19 +261,19 @@ export default function App() {
   useEffect(() => {
     if (viewMode !== 'player_game') return;
     const i = setInterval(() => {
-      if (!paused && !sr.current.finished && !tut) setT(v => v - 1);
+      if (!paused && !sr.current.finished && !tut) setT(v => Math.max(0, v - 1));
     }, 1000);
     return () => clearInterval(i);
   }, [viewMode, paused, tut]);
 
   useEffect(() => {
-    if (viewMode === 'player_game' && t <= 0 && !s.finished) {
+    if (viewMode === 'player_game' && t <= 0 && !s.finished && autoAdvance) {
       run({ type: 'advance' }, { role: 'host' });
-      setT(currentRoom?.roundTime || 120);
+      setT(roundSecs);
     }
   });
 
-  const sc = total(s), b = sel ? B.find(x => x.id === sel) : null, [ct, cb] = coachText(s), pu = pend ? s.units.find(u => u.id === pend.unit)! : null;
+  const sc = total(s), b = sel ? B.find(x => x.id === sel) : null, pu = pend ? s.units.find(u => u.id === pend.unit)! : null;
   const rows: Row[] | undefined =
     isRemote() && liveTeams && myTeam
       ? liveTeams
@@ -255,9 +286,9 @@ export default function App() {
   const closeTut = () => { localStorage.setItem(SEEN, '1'); setTut(false); };
 
   const UI: Record<string, [string, string, string]> = {
-    boat: ['🚤', 'Rescue Boat', 'Carries 40 people · uses 12 fuel + 6 food'],
-    amb: ['🚑', 'Ambulance', 'Carries 20 · uses 8 fuel + 1 medic · no broken bridges'],
-    drone: ['🛰️', 'Scout Drone', `Reveals one town · uses 8 fuel · ${s.droneFlights}/3 flights left${s.round >= 5 ? ' (Grounded)' : ''}`],
+    boat: ['🚤', 'Rescue Boat', `Takes up to ${R.cap.boat} people · ${R.cost.boat.fuel} fuel + ${R.cost.boat.food} food`],
+    amb: ['🚑', 'Ambulance', `Takes up to ${R.cap.amb} · ${R.cost.amb.fuel} fuel + 1 medic · cannot cross broken bridge`],
+    drone: ['🛰️', 'Scout Drone', `Shows the truth about one town · ${R.cost.drone.fuel} fuel · ${s.droneFlights}/${R.droneMax} flights left${s.round >= 5 ? ' (grounded)' : ''}`],
   };
 
   if (viewMode === 'menu') {
@@ -277,7 +308,7 @@ export default function App() {
       <JoinPage
         onBack={() => setViewMode('menu')}
         onGameStart={(room, teamId, name) => {
-          resetGame(teamId, room.roundTime || 120);
+          resetGame(teamId, room.roundTime || DEFAULT_ROUND, room.difficulty ?? 'easy');
           setCurrentRoom(room);
           setMyTeam({ id: teamId, name });
           setViewMode('player_game');
@@ -291,7 +322,7 @@ export default function App() {
       <HostPage
         onBack={() => setViewMode('menu')}
         onStartGame={room => {
-          resetGame(TEAM, room.roundTime || 120);
+          resetGame(TEAM, room.roundTime || DEFAULT_ROUND);
           setCurrentRoom(room);
           setViewMode('host_leaderboard');
         }}
@@ -388,52 +419,29 @@ export default function App() {
           ))}
         </span>
         <span className="rname">Round {s.round}: {RT[s.round - 1]}</span>
-        <span className="stat" title="Time remaining this round. Auto-advances when it reaches 0:00.">
-          ⏱ {Math.floor(t / 60)}:{String(t % 60).padStart(2, '0')}{paused ? ' (paused)' : ''}
+        <span className="stat" title={autoAdvance ? 'Time left this round. The next round starts automatically at 0:00.' : 'Time left this round. The facilitator starts the next round.'}>
+          ⏱ {Math.floor(t / 60)}:{String(t % 60).padStart(2, '0')}{paused ? ' (paused)' : ''}{t <= 0 && !autoAdvance ? ' · waiting for facilitator' : ''}
         </span>
-        <span className="stat" title={`Fuel powers unit deployments. Supply depot delivers +${DEPOT_FUEL} fuel at each round start.`}>
-          ⛽ Fuel {s.res.fuel}
-        </span>
-        <span className="stat" title={`Food is used by rescue boats to feed evacuees. Depot delivers +${DEPOT_FOOD} food each round start.`}>
-          🍞 Food {s.res.food}
-        </span>
-        <span className="stat" title="Ambulance operations require a paramedic.">
-          ⚕️ Medics {s.res.med}
-        </span>
-        <span className="stat highlight" title="Scout drone is strictly limited to 3 flights per game and grounded in Round 5.">
-          🛰️ Flights {s.droneFlights}/3
-        </span>
-        <span className="stat highlight" title="Investigation points for the Cross-check Desk in Reports tab. 3 per round; unused tokens do not carry over.">
-          🔍 Investigation {s.analystTokens}/3
-        </span>
-        <span className="stat" title="Total residents safely evacuated to shelters.">
-          🙂 Saved {s.saved}
-        </span>
-        <span className="stat" title="Rescue effectiveness and resource management score (max 50)">
-          🚤 Rescue {Math.round(sc.ops)}/50
-        </span>
-        <span className="stat" title="Source verification, AI oversight, and ethical communication score (max 50)">
-          🧠 Smart AI {Math.round(sc.ai)}/50
-        </span>
+        <span className="stat" title="Fuel is used every time you send a unit. More arrives each round.">⛽ Fuel {s.res.fuel}</span>
+        <span className="stat" title="Food is used by rescue boats. More arrives each round.">🍞 Food {s.res.food}</span>
+        <span className="stat" title="Ambulances need a medic.">⚕️ Medics {s.res.med}</span>
+        <span className="stat highlight" title={`Scout drone flights left (max ${R.droneMax}). Not available in Round 5.`}>🛰️ Drone {s.droneFlights}/{R.droneMax}</span>
+        <span className="stat highlight" title="Report checks left this round. You get more every round.">🔍 Checks {s.analystTokens}/{R.tokens}</span>
+        <span className="stat" title="People rescued so far.">🙂 Saved {s.saved}</span>
+        <span className="stat" title="Your total score out of 100. See the Score tab for details.">⭐ {Math.round(sc.all)}/100</span>
 
-        {/* ── Emergency Resupply Trigger ───────────────────────────── */}
         <button
           className="btn"
-          style={{
-            background: s.supply.emergencyUsed ? '#2a3b53' : '#d97706',
-            color: '#fff',
-            borderColor: '#b45309',
-            fontSize: '12px',
-          }}
-          title={`One-time emergency resupply: +${RESUPPLY_FUEL} fuel, +${RESUPPLY_FOOD} food at next round start. Fails if bridge is out!`}
+          style={{ background: s.supply.emergencyUsed ? '#2a3b53' : '#d97706', color: '#fff', borderColor: '#b45309', fontSize: '12px' }}
+          title={`One-time call for extra supplies: +${R.resupplyFuel} fuel, +${R.resupplyFood} food at the start of next round. It fails if the bridge is already out (Round 3+)!`}
           disabled={s.supply.emergencyUsed}
           onClick={() => d({ type: 'resupply' })}
         >
-          🚁 Resupply {s.supply.emergencyUsed ? (s.supply.emergencyPending ? '⏳ En Route' : s.supply.bridgeBlockedAt ? '❌ Blocked' : '✅ Received') : 'Request'}
+          🚁 Extra supplies {s.supply.emergencyUsed ? (s.supply.emergencyPending ? '⏳ on the way' : s.supply.bridgeBlockedAt ? '❌ blocked' : '✅ received') : '(once)'}
         </button>
 
-        <button className="btn" onClick={() => setGl(true)}>❓ Guide</button>
-        <button className="btn" onClick={() => setTut(true)}>Tutorial</button>
+        <button className="btn" onClick={() => setTut(true)}>❓ Help</button>
+        <button className="btn" onClick={() => setGl(true)}>📖 Words</button>
       </header>
 
       <main className="main">
@@ -449,20 +457,22 @@ export default function App() {
             onDrop={order}
           />
 
-          <div className="coach">
-            <b>{ct}</b>
-            <br />
-            {cb}
-          </div>
+          <Goals s={s} />
 
           <button className="btn legendbtn" onClick={() => setLg(!lg)}>🗺 Map key</button>
-          {lg && <Legend />}
+          {lg && <Legend mode={s.mode} />}
           {msg && <div className="toast">{msg}</div>}
+          {notice && (
+            <div className="notice">
+              <span>{notice}</span>
+              <button className="btn" onClick={() => setNotice('')}>OK</button>
+            </div>
+          )}
 
           <div className="dock">
             {pend && pu ? (
               <>
-                <b>Send {UI[pu.ty][1]} {pu.id} to {B.find(x => x.id === pend.b)!.n}?</b> Cost: {Object.entries(COST[pu.ty]).map(([k, v]) => `${v} ${k}`).join(', ')}.
+                <b>Send {UI[pu.ty][1]} {pu.id} to {B.find(x => x.id === pend.b)!.n}?</b> Cost: {Object.entries(R.cost[pu.ty]).map(([k, v]) => `${v} ${k}`).join(', ')}.
                 <button
                   className="btn ok"
                   onClick={() => {
@@ -478,13 +488,17 @@ export default function App() {
               <>
                 <b>{b.n}</b>: about {b.pop} residents.{' '}
                 {s.rev[b.id] === s.round ? (
-                  <>Observed this round: <b>{flooded(s, b) ? '🔵 FLOODED' : 'DRY'}</b>, {s.pop[b.id]} still need help.</>
+                  <>Drone saw it this round: <b>{flooded(s, b) ? '🔵 FLOODED' : '🟢 DRY'}</b>, {s.pop[b.id]} still need help.</>
+                ) : support(s, b) && reports(s).some(r => r.b === b.id && r.rd <= s.round && r.cl === 'f') ? (
+                  <>✅ <b>Confirmed flooded by checked reports.</b> Safe to send a boat.</>
+                ) : reports(s).some(r => r.b === b.id && r.rd <= s.round && r.cl === 'f') ? (
+                  <>🟡 Reports say flooded, but <b>not confirmed</b>. Check them in the Reports tab, or use a drone flight.</>
                 ) : (
-                  <>Unobserved this round (Fog of War). Cross-check reports or use 1 of your {s.droneFlights} drone flights to confirm ground truth.</>
+                  <>⚪ No flood reports yet. We do not know.</>
                 )}
               </>
             ) : (
-              'Drag a unit from the bottom tray onto a town, or click a unit then click a town. Unrescued flooded towns lose 15% population per round!'
+              'To rescue people: drag a unit from the bottom onto a town (or tap a unit, then tap a town). Tap a town to see what we know about it.'
             )}
           </div>
         </section>
@@ -523,7 +537,7 @@ export default function App() {
               onDragStart={e => e.dataTransfer.setData('unit', u.id)}
               onClick={() => {
                 if (isDroneBlocked) {
-                  return say(s.round >= 5 ? 'Drone grounded in Round 5!' : 'No scout flights remaining! Limit: 3 per game.');
+                  return say(s.round >= 5 ? 'The drone is grounded in Round 5 (storm).' : `No scout flights left (limit ${R.droneMax} per game).`);
                 }
                 if (u.st === 'idle') setUnit(unit === u.id ? null : u.id);
               }}
@@ -531,11 +545,11 @@ export default function App() {
               <b>{UI[u.ty][0]} {UI[u.ty][1]} {u.id}</b>
               <small>
                 {u.st !== 'idle'
-                  ? 'On a mission, returning soon'
+                  ? 'On a mission, back soon'
                   : isDroneBlocked
                   ? s.round >= 5
                     ? 'Grounded: storm interference'
-                    : 'Out of flights (3/3 used)'
+                    : `Out of flights (${R.droneMax}/${R.droneMax} used)`
                   : UI[u.ty][2]}
               </small>
             </div>
@@ -543,7 +557,7 @@ export default function App() {
         })}
       </footer>
 
-      {tut && <Tutorial onClose={closeTut} />}
+      {tut && <Tutorial onClose={closeTut} mode={s.mode} />}
       {gl && <Glossary onClose={() => setGl(false)} />}
     </div>
   );

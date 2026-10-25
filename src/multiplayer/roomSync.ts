@@ -17,6 +17,20 @@
 /// <reference types="vite/client" />
 import { createClient, type RealtimeChannel } from '@supabase/supabase-js';
 
+/** Live progress details a team reports to the facilitator. */
+export interface TeamInfo {
+  round: number;
+  fuel: number;
+  food: number;
+  flights: number;
+  tokens: number;
+  checks: number;        // cross-check results gathered so far
+  caughtFake: boolean;   // flagged the AI's made-up citation
+  fellForFake: boolean;  // approved a plan that cited a made-up report
+  falseAlarms: number;   // units sent to dry/empty areas
+  lastEvent: string;     // most recent log line
+}
+
 export interface RoomTeam {
   id: string;
   name: string;
@@ -30,6 +44,9 @@ export interface RoomTeam {
   reportsChecked: number;
   status: 'waiting' | 'ready' | 'in_mission' | 'finished';
   joinedAt: number;
+  info?: TeamInfo;
+  /** Set by the host whenever it hears from this team (used to spot idle/disconnected teams). */
+  lastSeen?: number;
 }
 
 export interface ServerRoom {
@@ -43,6 +60,10 @@ export interface ServerRoom {
   currentRound: number;
   timeRemaining: number;
   isPaused: boolean;
+  /** 'easy' = guided rules (default), 'classic' = original numbers. */
+  difficulty?: 'easy' | 'classic';
+  /** false = rounds only advance when the facilitator presses Advance. */
+  autoAdvance?: boolean;
   createdAt: number;
   startedAt?: number;
   teams: RoomTeam[];
@@ -67,8 +88,9 @@ export type SyncMessage =
       wasteCount: number;
       reportsChecked: number;
       status?: RoomTeam['status'];
+      info?: TeamInfo;
     }
-  | { type: 'HOST_ACTION'; roomCode: string; action: 'advance' | 'pause' | 'resume' | 'inject'; payload?: string }
+  | { type: 'HOST_ACTION'; roomCode: string; action: 'advance' | 'pause' | 'resume' | 'inject' | 'announce' | 'addtime' | 'grant'; payload?: string }
   | { type: 'ROOM_CLOSED'; roomCode: string };
 
 type Envelope = SyncMessage & { _id?: string };
@@ -214,6 +236,8 @@ function internal(msg: SyncMessage): void {
             wasteCount: msg.wasteCount,
             reportsChecked: msg.reportsChecked,
             status: msg.status ?? t.status,
+            info: msg.info ?? t.info,
+            lastSeen: Date.now(),
           }),
       });
       scheduleRoomBroadcast(code); // throttled: many teams scoring at once
@@ -337,6 +361,8 @@ export function createNewRoom(options: {
   maxTeams: number;
   roundTime: number;
   droneFlights: number;
+  difficulty?: 'easy' | 'classic';
+  autoAdvance?: boolean;
 }): ServerRoom {
   const code = options.code.toUpperCase();
   const room: ServerRoom = {
@@ -350,6 +376,8 @@ export function createNewRoom(options: {
     currentRound: 1,
     timeRemaining: options.roundTime || 120,
     isPaused: false,
+    difficulty: options.difficulty ?? 'easy',
+    autoAdvance: options.autoAdvance ?? true,
     createdAt: Date.now(),
     teams: [],
     logs: [{ time: stamp(), text: `Command server created. Code: ${code} (Max: ${options.maxTeams} teams).` }],

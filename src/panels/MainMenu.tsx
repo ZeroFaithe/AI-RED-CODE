@@ -12,7 +12,7 @@ import {
   subscribeToSync,
   PRESET_BOT_NAMES,
 } from '../multiplayer/roomSync';
-import { RT } from '../../shared/scenario';
+import { B, R0, RT, GM_GUIDE, RULESETS } from '../../shared/scenario';
 
 /* ───────────────────────────────────────────────────────────────────────────
    1. LANDING PAGE
@@ -244,11 +244,12 @@ export function JoinPage({ onBack, onGameStart }: JoinPageProps) {
         name: 'Disaster Response Command',
         hostId: 'host-pending',
         maxTeams: 10,
-        roundTime: 120,
-        droneFlights: 3,
+        roundTime: 240,
+        droneFlights: 5,
+        difficulty: 'easy',
         status: 'lobby',
         currentRound: 1,
-        timeRemaining: 120,
+        timeRemaining: 240,
         isPaused: false,
         createdAt: Date.now(),
         teams: [],
@@ -483,8 +484,9 @@ export function HostPage({ onBack, onStartGame }: HostPageProps) {
   const [roomCode, setRoomCode] = useState(generateRoomCode);
   const [roomName, setRoomName] = useState('Central Luzon Command Post');
   const [maxTeams, setMaxTeams] = useState(10);
-  const [roundTime, setRoundTime] = useState(120);
-  const [droneFlights, setDroneFlights] = useState(3);
+  const [roundTime, setRoundTime] = useState(240);
+  const [difficulty, setDifficulty] = useState<'easy' | 'classic'>('easy');
+  const [autoAdvance, setAutoAdvance] = useState(true);
   const [passcode, setPasscode] = useState('CODERED');
   const [room, setRoom] = useState<ServerRoom | null>(null);
   const [copied, setCopied] = useState(false);
@@ -512,7 +514,9 @@ export function HostPage({ onBack, onStartGame }: HostPageProps) {
       hostId: 'host-' + Date.now(),
       maxTeams,
       roundTime,
-      droneFlights,
+      droneFlights: RULESETS[difficulty].droneMax,
+      difficulty,
+      autoAdvance,
     });
     broadcast({ type: 'RESET_GAME', roomCode: newRoom.code });
     setRoom(newRoom);
@@ -720,25 +724,35 @@ export function HostPage({ onBack, onStartGame }: HostPageProps) {
                     value={roundTime}
                     onChange={e => setRoundTime(Number(e.target.value))}
                   >
-                    <option value={60}>60 Seconds (Blitz)</option>
-                    <option value={90}>90 Seconds (Fast)</option>
-                    <option value={120}>120 Seconds (Standard)</option>
-                    <option value={180}>180 Seconds (Extended)</option>
+                    <option value={120}>2 minutes (fast, experienced players)</option>
+                    <option value={180}>3 minutes</option>
+                    <option value={240}>4 minutes (recommended for beginners)</option>
+                    <option value={300}>5 minutes</option>
+                    <option value={420}>7 minutes (first-time players)</option>
                   </select>
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label">Drone Flights Limit</label>
+                  <label className="form-label">Difficulty</label>
                   <select
                     className="form-input"
-                    value={droneFlights}
-                    onChange={e => setDroneFlights(Number(e.target.value))}
+                    value={difficulty}
+                    onChange={e => setDifficulty(e.target.value as 'easy' | 'classic')}
                   >
-                    <option value={2}>2 Flights (Strict)</option>
-                    <option value={3}>3 Flights (Default)</option>
-                    <option value={5}>5 Flights (Generous)</option>
+                    <option value="easy">Guided - easier, for first-time players</option>
+                    <option value="classic">Classic - original, harder rules</option>
                   </select>
                 </div>
+              </div>
+
+              <div className="form-group">
+                <label style={{ display: 'flex', gap: 10, alignItems: 'center', cursor: 'pointer', fontSize: 14 }}>
+                  <input type="checkbox" checked={autoAdvance} onChange={e => setAutoAdvance(e.target.checked)} style={{ width: 18, height: 18 }} />
+                  Start the next round automatically when time runs out
+                </label>
+                <span className="hint" style={{ display: 'block', marginTop: 4 }}>
+                  Turn this OFF to control the pace yourself: when time is up, students wait for you to press "Start next round" (good for class discussion between rounds).
+                </span>
               </div>
 
               <div className="form-group">
@@ -922,183 +936,211 @@ interface HostLeaderboardProps {
   onExit: () => void;
 }
 
-export function HostLeaderboard({
-  room,
-  onAdvanceRound,
-  onTogglePause,
-  onInject,
-  onExit,
-}: HostLeaderboardProps) {
+const QUICK_MESSAGES = [
+  'Remember: many people sharing one post is still only ONE source.',
+  'Before you send a boat, check the report with at least 2 different sources.',
+  'The AI can make things up. Tap its sources to check that they are real.',
+  'Read your Goals box - it tells you the next step.',
+  'Talk to your teammates before you decide. Two minds are better than one.',
+];
+
+const tile = (label: string, value: string | number, sub?: string, color = '#e2e8f0') => (
+  <div className="gm-tile" key={label}>
+    <div className="gm-tile-value" style={{ color }}>{value}</div>
+    <div className="gm-tile-label">{label}</div>
+    {sub && <div className="gm-tile-sub">{sub}</div>}
+  </div>
+);
+
+export function HostLeaderboard({ room, onAdvanceRound, onTogglePause, onInject, onExit }: HostLeaderboardProps) {
   const [currentRoom, setCurrentRoom] = useState<ServerRoom>(room);
   const [timer, setTimer] = useState(room.timeRemaining);
   const [isPaused, setIsPaused] = useState(room.isPaused);
   const [injectToast, setInjectToast] = useState('');
+  const [target, setTarget] = useState<string>('all');
+  const [text, setText] = useState('');
+  const [now, setNow] = useState(Date.now());
+  const [flash, setFlash] = useState('');
 
-  // Live synchronization of team scores and events
   useEffect(() => {
     const unsubscribe = subscribeToSync(msg => {
       if ('roomCode' in msg && msg.roomCode.toUpperCase() === room.code.toUpperCase()) {
         const fresh = getRoom(room.code);
-        if (fresh) {
-          setCurrentRoom(fresh);
-        }
+        if (fresh) setCurrentRoom(fresh);
       }
     });
     return () => unsubscribe();
   }, [room.code]);
 
-  // Timer countdown
   useEffect(() => {
     const interval = setInterval(() => {
-      if (!isPaused && timer > 0) {
-        setTimer(v => v - 1);
-      }
+      setNow(Date.now());
+      if (!isPaused) setTimer(v => Math.max(0, v - 1));
     }, 1000);
     return () => clearInterval(interval);
-  }, [isPaused, timer]);
+  }, [isPaused]);
 
+  // Adopt the new round time when the host presses Advance
+  useEffect(() => { setTimer(currentRoom.roundTime); }, [currentRoom.currentRound, currentRoom.roundTime]);
+
+  const say = (m: string) => { setFlash(m); setTimeout(() => setFlash(''), 3500); };
+  const pushLog = (line: string) => {
+    const fresh = getRoom(room.code) || currentRoom;
+    const updated: ServerRoom = { ...fresh, logs: [{ time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), text: line }, ...fresh.logs].slice(0, 100) };
+    saveRoom(updated);
+    setCurrentRoom(updated);
+    broadcast({ type: 'ROOM_UPDATE', room: updated });
+  };
+  const targetName = target === 'all' ? 'all teams' : currentRoom.teams.find(t => t.id === target)?.name ?? 'team';
+
+  const sendAnnounce = (msg: string) => {
+    const clean = msg.trim();
+    if (!clean) return;
+    broadcast({ type: 'HOST_ACTION', roomCode: room.code, action: 'announce', payload: JSON.stringify({ to: target, text: clean }) });
+    pushLog(`📢 To ${targetName}: "${clean}"`);
+    say(`Sent to ${targetName}`);
+    setText('');
+  };
+  const sendGrant = (fuel: number, food: number) => {
+    broadcast({ type: 'HOST_ACTION', roomCode: room.code, action: 'grant', payload: JSON.stringify({ to: target, fuel, food }) });
+    pushLog(`🎁 Sent +${fuel} fuel, +${food} food to ${targetName}.`);
+    say(`Supplies sent to ${targetName}`);
+  };
+  const addTime = (sec: number) => {
+    broadcast({ type: 'HOST_ACTION', roomCode: room.code, action: 'addtime', payload: String(sec) });
+    setTimer(v => v + sec);
+    pushLog(`⏱ Added ${sec / 60} minute(s) to the round for everyone.`);
+  };
   const triggerInject = (k: 's' | 'r' | 'o', desc: string) => {
     onInject(k);
     setInjectToast(desc);
     setTimeout(() => setInjectToast(''), 4000);
   };
 
-  // Sort teams by total score descending
-  const sortedTeams = [...currentRoom.teams].sort((a, b) => (b.score || 0) - (a.score || 0));
+  const teams = currentRoom.teams.filter(t => !t.isBot);
+  const everyone = currentRoom.teams;
+  const sorted = [...everyone].sort((a, b) => (b.score || 0) - (a.score || 0));
+  const playing = teams.filter(t => t.info);
+  const avg = teams.length ? teams.reduce((a, t) => a + (t.score || 0), 0) / teams.length : 0;
+  const saved = teams.reduce((a, t) => a + (t.savedCount || 0), 0);
+  const caught = playing.filter(t => t.info!.caughtFake).length;
+  const fell = playing.filter(t => t.info!.fellForFake).length;
+  const checkers = playing.filter(t => t.info!.checks > 0).length;
+  const rd = currentRoom.currentRound;
+  const guide = GM_GUIDE[rd - 1];
+  const floodedNow = B.filter(b => rd >= b.fr && b.fr < 99);
+  const rdReports = R0.filter(r => r.rd === rd);
+  const auto = currentRoom.autoAdvance !== false;
+
+  // Who needs attention, and why
+  const attention = playing.map(t => {
+    const why: string[] = [];
+    const info = t.info!;
+    const idle = t.lastSeen ? Math.round((now - t.lastSeen) / 1000) : null;
+    if (idle !== null && idle > 90 && t.status !== 'finished') why.push(`no activity for ${idle}s`);
+    if (rd >= 2 && info.checks === 0) why.push('has not checked any report yet');
+    if (info.falseAlarms >= 2) why.push(`${info.falseAlarms} units sent to dry areas`);
+    if (info.fellForFake) why.push('approved the AI\'s made-up source');
+    if (info.fuel < 10) why.push('almost out of fuel');
+    if (info.round < rd) why.push(`still on round ${info.round}`);
+    if (rd >= 3 && teams.length > 2 && (t.score || 0) < avg * 0.5) why.push('far below class average');
+    return { t, why };
+  }).filter(x => x.why.length > 0);
+
+  const exportCsv = () => {
+    const head = ['Team', 'Total', 'Rescue', 'SmartAI', 'Saved', 'Checks', 'FalseAlarms', 'CaughtFakeSource', 'ApprovedFakeSource', 'Round', 'Fuel', 'Food'];
+    const lines = sorted.map(t => [t.name, Math.round(t.score || 0), Math.round(t.opsScore || 0), Math.round(t.aiScore || 0), t.savedCount || 0, t.info?.checks ?? '', t.info?.falseAlarms ?? '', t.info?.caughtFake ? 'yes' : 'no', t.info?.fellForFake ? 'yes' : 'no', t.info?.round ?? '', t.info?.fuel ?? '', t.info?.food ?? '']
+      .map(v => `"${String(v).replace(/"/g, '""')}"`).join(','));
+    const blob = new Blob([[head.join(','), ...lines].join('\n')], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `code-red-${currentRoom.code}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
 
   return (
     <div className="host-dashboard">
-      {/* Top Bar Navigation */}
       <header className="host-topbar">
         <div className="host-brand">
-          <span className="host-title">AI: CODE RED · HOST DASHBOARD</span>
-          <span className="code-badge" style={{ fontSize: 16, padding: '4px 10px' }}>
-            {currentRoom.code}
-          </span>
+          <span className="host-title">AI: CODE RED · FACILITATOR</span>
+          <span className="code-badge" style={{ fontSize: 16, padding: '4px 10px' }}>{currentRoom.code}</span>
         </div>
-
         <div className="host-stats-row">
-          <span className="host-stat-chip active">
-            Round {currentRoom.currentRound} / 5: {RT[currentRoom.currentRound - 1]}
-          </span>
+          <span className="host-stat-chip active">Round {rd} / 5: {RT[rd - 1]}</span>
           <span className="host-stat-chip">
             ⏱ {Math.floor(timer / 60)}:{String(timer % 60).padStart(2, '0')}{isPaused ? ' (PAUSED)' : ''}
+            {timer === 0 && !isPaused && (auto ? ' · advancing' : ' · TIME IS UP')}
           </span>
-          <span className="host-stat-chip">
-            👥 {currentRoom.teams.length} Active Teams
-          </span>
-
-          <button
-            className="menu-btn secondary"
-            style={{ width: 'auto', padding: '6px 14px', fontSize: 13 }}
-            onClick={() => {
-              setIsPaused(!isPaused);
-              onTogglePause();
-            }}
-          >
+          <span className="host-stat-chip">👥 {teams.length} team{teams.length === 1 ? '' : 's'}</span>
+          <span className="host-stat-chip">{currentRoom.difficulty === 'classic' ? 'Classic rules' : 'Guided rules'}</span>
+          <button className="menu-btn secondary" style={{ width: 'auto', padding: '6px 14px', fontSize: 13 }} onClick={() => { setIsPaused(!isPaused); onTogglePause(); }}>
             {isPaused ? '▶ Resume' : '⏸ Pause'}
           </button>
-
-          <button
-            className="menu-btn primary"
-            style={{ width: 'auto', padding: '6px 14px', fontSize: 13 }}
-            onClick={onAdvanceRound}
-          >
-            ⏭ Advance Round
+          <button className="menu-btn secondary" style={{ width: 'auto', padding: '6px 14px', fontSize: 13 }} onClick={() => addTime(60)}>＋1 min</button>
+          <button className="menu-btn primary" style={{ width: 'auto', padding: '6px 14px', fontSize: 13 }} onClick={onAdvanceRound} disabled={rd >= 5}>
+            ⏭ {rd >= 5 ? 'Final round' : `Start round ${rd + 1}`}
           </button>
-
-          <button
-            className="menu-btn secondary"
-            style={{ width: 'auto', padding: '6px 12px', fontSize: 13, borderColor: '#ef4444', color: '#f87171' }}
-            onClick={onExit}
-          >
-            Exit to Menu
-          </button>
+          <button className="menu-btn secondary" style={{ width: 'auto', padding: '6px 12px', fontSize: 13, borderColor: '#ef4444', color: '#f87171' }} onClick={onExit}>Exit</button>
         </div>
       </header>
 
-      {/* Main Content Layout: Leaderboard on Left, Facilitator Console on Right */}
+      {flash && <div className="gm-flash">{flash}</div>}
+
       <div className="host-layout">
-        {/* Left: Grand Leaderboard */}
         <main className="host-main">
-          <div className="board-header-section">
-            <div>
-              <h2 style={{ margin: '0 0 4px', fontSize: 24, fontWeight: 800 }}>
-                🏆 Live Team Leaderboard
-              </h2>
-              <div style={{ color: '#94a3b8', fontSize: 14 }}>
-                Rankings update in real time as student command centers triage alerts, deploy boats, and verify sources.
-              </div>
-            </div>
-            <div style={{ fontSize: 13, color: '#38bdf8', fontWeight: 600 }}>
-              ● Live Syncing {sortedTeams.length} Teams
-            </div>
+          {/* Class snapshot */}
+          <div className="gm-tiles">
+            {tile('Class average', Math.round(avg), 'out of 100')}
+            {tile('People saved', saved, 'all teams')}
+            {tile('Checked a report', `${checkers}/${playing.length}`, 'teams using the desk', checkers < playing.length / 2 ? '#fbbf24' : '#34d399')}
+            {tile('Caught AI fake source', `${caught}/${playing.length}`, 'flagged "R77"', '#34d399')}
+            {tile('Fooled by AI fake', fell, 'approved it', fell ? '#f87171' : '#94a3b8')}
+            {tile('Need attention', attention.length, 'see below', attention.length ? '#fbbf24' : '#94a3b8')}
           </div>
 
-          <div className="board-table-card">
+          {/* Needs attention */}
+          <div className="gm-card">
+            <h3 className="gm-h">🙋 Teams that may need help</h3>
+            {attention.length === 0 ? (
+              <div className="gm-muted">Nobody flagged right now. Teams appear here if they are idle, behind, out of fuel, or repeating mistakes.</div>
+            ) : attention.map(({ t, why }) => (
+              <div key={t.id} className="gm-attn">
+                <b>{t.name}</b> <span className="gm-muted">- {why.join('; ')}</span>
+                <button className="gm-mini" onClick={() => { setTarget(t.id); say(`Selected ${t.name} - use the Send panel →`); }}>Select</button>
+              </div>
+            ))}
+          </div>
+
+          {/* Table */}
+          <div className="board-header-section">
+            <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>🏆 Teams <span className="gm-muted" style={{ fontSize: 13 }}>(click a row to select it for messages and supplies)</span></h2>
+            <button className="gm-mini" onClick={exportCsv}>⬇ Download results (CSV)</button>
+          </div>
+          <div className="board-table-card" style={{ overflowX: 'auto' }}>
             <table className="leaderboard-table">
               <thead>
                 <tr>
-                  <th style={{ width: 60 }}>Rank</th>
-                  <th>Team Call Sign</th>
-                  <th>Total Score</th>
-                  <th>Rescue (50)</th>
-                  <th>Smart AI (50)</th>
-                  <th>Saved</th>
-                  <th>Waste</th>
-                  <th>Fact-Checks</th>
-                  <th>Status</th>
+                  <th>#</th><th>Team</th><th>Score</th><th>Saved</th><th>Round</th><th>Fuel / Food</th><th>Checks</th><th>AI fake source</th><th>False alarms</th><th>Last action</th>
                 </tr>
               </thead>
               <tbody>
-                {sortedTeams.map((team, idx) => {
-                  const rank = idx + 1;
+                {sorted.map((t, idx) => {
+                  const i = t.info;
+                  const idle = t.lastSeen ? Math.round((now - t.lastSeen) / 1000) : null;
                   return (
-                    <tr key={team.id}>
-                      <td className="rank-cell">
-                        <div className={'rank-pill ' + (rank === 1 ? 'rank-1' : rank === 2 ? 'rank-2' : rank === 3 ? 'rank-3' : '')}>
-                          {rank <= 3 ? ['🥇', '🥈', '🥉'][rank - 1] : `#${rank}`}
-                        </div>
-                      </td>
-                      <td className="team-name-cell">
-                        <span>{team.name}</span>
-                        {team.isBot && <span className="team-pill-badge bot">SIM</span>}
-                      </td>
-                      <td className="score-cell">
-                        {Math.round(team.score || 0)} <span style={{ fontSize: 13, color: '#64748b' }}>pts</span>
-                      </td>
-                      <td>
-                        <span style={{ color: '#38bdf8', fontWeight: 700 }}>
-                          {Math.round(team.opsScore || 0)}
-                        </span> / 50
-                      </td>
-                      <td>
-                        <span style={{ color: '#a78bfa', fontWeight: 700 }}>
-                          {Math.round(team.aiScore || 0)}
-                        </span> / 50
-                      </td>
-                      <td style={{ fontWeight: 600, color: '#34d399' }}>
-                        🙂 {team.savedCount || 0}
-                      </td>
-                      <td style={{ color: team.wasteCount ? '#ef4444' : '#94a3b8' }}>
-                        ⛽ {team.wasteCount || 0}u
-                      </td>
-                      <td>
-                        🔍 {team.reportsChecked || 0}
-                      </td>
-                      <td>
-                        <span
-                          style={{
-                            padding: '3px 8px',
-                            borderRadius: 6,
-                            fontSize: 12,
-                            fontWeight: 700,
-                            background: 'rgba(56, 189, 248, 0.15)',
-                            color: '#38bdf8',
-                          }}
-                        >
-                          {team.status === 'finished' ? '🏁 Complete' : 'Active'}
-                        </span>
+                    <tr key={t.id} className={target === t.id ? 'gm-row-sel' : ''} onClick={() => setTarget(target === t.id ? 'all' : t.id)} style={{ cursor: 'pointer' }}>
+                      <td className="rank-cell">{idx < 3 ? ['🥇', '🥈', '🥉'][idx] : idx + 1}</td>
+                      <td className="team-name-cell"><span>{t.name}</span>{t.isBot && <span className="team-pill-badge bot">SIM</span>}</td>
+                      <td className="score-cell">{Math.round(t.score || 0)}</td>
+                      <td style={{ color: '#34d399', fontWeight: 700 }}>{t.savedCount || 0}</td>
+                      <td>{t.status === 'finished' ? '🏁' : i ? `${i.round}/5` : '-'}</td>
+                      <td>{i ? `${i.fuel} / ${i.food}` : '-'}</td>
+                      <td>{i ? i.checks : '-'}</td>
+                      <td>{!i ? '-' : i.caughtFake ? <span style={{ color: '#34d399' }}>✔ caught</span> : i.fellForFake ? <span style={{ color: '#f87171' }}>✖ fooled</span> : <span className="gm-muted">not yet</span>}</td>
+                      <td style={{ color: i && i.falseAlarms ? '#f87171' : '#94a3b8' }}>{i ? i.falseAlarms : '-'}</td>
+                      <td className="gm-muted" style={{ fontSize: 12, maxWidth: 260 }}>
+                        {i ? i.lastEvent.slice(0, 70) : 'waiting…'}{idle !== null && idle > 45 ? ` (${idle}s ago)` : ''}
                       </td>
                     </tr>
                   );
@@ -1108,55 +1150,72 @@ export function HostLeaderboard({
           </div>
         </main>
 
-        {/* Right Sidebar: Facilitator Controls & Telemetry */}
         <aside className="host-sidebar">
-          {/* Facilitator Inject Controls */}
+          {/* Round guide */}
           <div className="ctrl-card">
-            <h4 className="ctrl-title">⚡ Facilitator Crisis Injects</h4>
-            <button
-              className="inject-btn"
-              onClick={() => triggerInject('s', '🌊 Triggered Early Storm Surge in Dalig!')}
-            >
-              🌊 <span>Early Storm Surge (Dalig)</span>
-            </button>
-            <button
-              className="inject-btn"
-              onClick={() => triggerInject('r', '💬 Released Unverified Social Media Viral Rumor!')}
-            >
-              💬 <span>Viral Social Media Rumor</span>
-            </button>
-            <button
-              className="inject-btn"
-              onClick={() => triggerInject('o', '📡 Simulated AI Network Uplink Blackout!')}
-            >
-              📡 <span>Sever AI Network Uplink</span>
-            </button>
-            {injectToast && (
-              <div style={{ marginTop: 8, padding: '8px 10px', background: '#059669', color: '#fff', borderRadius: 8, fontSize: 12, fontWeight: 700 }}>
-                {injectToast}
+            <h4 className="ctrl-title">📘 Round {rd} guide (facilitator only)</h4>
+            <div className="gm-muted" style={{ marginBottom: 6 }}>{RT[rd - 1]}</div>
+            <div style={{ fontSize: 13, lineHeight: 1.5 }}><b>What is really happening:</b> {guide.watch}</div>
+            <div style={{ fontSize: 13, lineHeight: 1.5, marginTop: 6, color: '#7dd3fc' }}><b>Ask the class:</b> {guide.ask}</div>
+            <details style={{ marginTop: 8 }}>
+              <summary className="gm-muted" style={{ cursor: 'pointer' }}>Answer key for this round</summary>
+              <div style={{ fontSize: 12, marginTop: 6 }}>
+                <b>Actually flooded now:</b> {floodedNow.length ? floodedNow.map(b => b.n).join(', ') : 'none yet'}
               </div>
-            )}
+              {rdReports.map(r => (
+                <div key={r.id} style={{ fontSize: 12, marginTop: 3 }}>
+                  <b>{r.id}</b> ({r.b}) {r.t ? <span style={{ color: '#34d399' }}>TRUE</span> : <span style={{ color: '#f87171' }}>FALSE/OLD</span>} - {r.pv}
+                </div>
+              ))}
+              {(rd === 3 || rd === 5) && <div style={{ fontSize: 12, marginTop: 3 }}><b>R77</b> <span style={{ color: '#f87171' }}>does not exist</span> - the AI invents it this round.</div>}
+            </details>
           </div>
 
-          {/* Round Timeline & Bridge Status */}
+          {/* Message + supplies */}
           <div className="ctrl-card">
-            <h4 className="ctrl-title">🌉 Tactical Environmental Status</h4>
+            <h4 className="ctrl-title">📢 Send to students</h4>
+            <label className="gm-muted" style={{ fontSize: 12 }}>Send to</label>
+            <select className="form-input" value={target} onChange={e => setTarget(e.target.value)} style={{ marginBottom: 8 }}>
+              <option value="all">All teams</option>
+              {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+            <textarea className="form-input" rows={2} value={text} onChange={e => setText(e.target.value)} placeholder="Type a message that pops up on their screen" />
+            <button className="inject-btn" style={{ marginTop: 6 }} onClick={() => sendAnnounce(text)} disabled={!text.trim()}>📢 <span>Send message to {targetName}</span></button>
+            <details style={{ marginTop: 6 }}>
+              <summary className="gm-muted" style={{ cursor: 'pointer' }}>Quick hints</summary>
+              {QUICK_MESSAGES.map(m => <button key={m} className="gm-quick" onClick={() => sendAnnounce(m)}>{m}</button>)}
+            </details>
+            <h4 className="ctrl-title" style={{ marginTop: 14 }}>🎁 Send supplies</h4>
+            <button className="inject-btn" onClick={() => sendGrant(20, 10)}>⛽ <span>+20 fuel, +10 food to {targetName}</span></button>
+            <button className="inject-btn" onClick={() => sendGrant(50, 25)}>⛽ <span>+50 fuel, +25 food to {targetName}</span></button>
+            <button className="inject-btn" onClick={() => addTime(120)}>⏱ <span>Give everyone +2 minutes</span></button>
+          </div>
+
+          {/* Injects */}
+          <div className="ctrl-card">
+            <h4 className="ctrl-title">⚡ Crisis events (affects all teams)</h4>
+            <button className="inject-btn" onClick={() => triggerInject('s', '🌊 Early storm surge in Dalig sent to all teams')}>🌊 <span>Storm surge hits Dalig</span></button>
+            <button className="inject-btn" onClick={() => triggerInject('r', '💬 Viral rumor sent to all teams')}>💬 <span>Viral social media rumor</span></button>
+            <button className="inject-btn" onClick={() => triggerInject('o', '📡 AI helper cut off for all teams')}>📡 <span>Cut off the AI helper</span></button>
+            {injectToast && <div style={{ marginTop: 8, padding: '8px 10px', background: '#059669', color: '#fff', borderRadius: 8, fontSize: 12, fontWeight: 700 }}>{injectToast}</div>}
+            <div className="gm-muted" style={{ marginTop: 8, fontSize: 12 }}>Tip: use the rumor in Round 2 or 3 to test whether teams check before acting.</div>
+          </div>
+
+          <div className="ctrl-card">
+            <h4 className="ctrl-title">🌉 Conditions</h4>
             <div style={{ fontSize: 13, lineHeight: 1.6, color: '#cfe0f5' }}>
-              <div><b>Bagong Silang Bridge:</b> {currentRoom.currentRound >= 3 ? '🔴 WASHED OUT (Land blocked)' : '🟢 OPEN'}</div>
-              <div><b>Drone Reconnaissance:</b> {currentRoom.currentRound >= 5 ? '🔴 GROUNDED (Wind gust blackout)' : '🟢 ACTIVE'}</div>
-              <div><b>Barangay Phone Lines:</b> {currentRoom.currentRound >= 5 ? '🔴 OFFLINE' : '🟢 ONLINE'}</div>
+              <div><b>Bridge:</b> {rd >= 3 ? '🔴 OUT (ambulances blocked, emergency supplies fail)' : '🟢 open'}</div>
+              <div><b>Drone:</b> {rd >= 5 ? '🔴 grounded' : '🟢 flying'}</div>
+              <div><b>Barangay phones:</b> {rd >= 5 ? '🔴 down' : '🟢 working'}</div>
+              <div><b>Round advance:</b> {auto ? 'automatic at 0:00' : 'manual (you press the button)'}</div>
             </div>
           </div>
 
-          {/* Live Simulation Event Log */}
           <div className="ctrl-card" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-            <h4 className="ctrl-title">📜 Live Event Ticker</h4>
+            <h4 className="ctrl-title">📜 Event log</h4>
             <div className="log-ticker">
-              {currentRoom.logs.map((log, i) => (
-                <div key={i} className="log-entry">
-                  <span className="log-time">{log.time}</span>
-                  {log.text}
-                </div>
+              {currentRoom.logs.map((l, i) => (
+                <div key={i} className="log-entry"><span className="log-time">{l.time}</span>{l.text}</div>
               ))}
             </div>
           </div>
