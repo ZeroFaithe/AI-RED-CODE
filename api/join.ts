@@ -1,11 +1,23 @@
 import { getAdminClient } from '../server/supabaseServer';
 
-export default async function handler(req: any, res: any) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ ok: false, error: 'Method not allowed' });
+function parseBody(body: any): any {
+  if (typeof body === 'string') {
+    try {
+      return JSON.parse(body);
+    } catch {
+      return {};
+    }
   }
+  return body || {};
+}
 
-  const { token, sessionCode, sessionId, teamName, teamNum } = req.body || {};
+export default async function handler(req: any, res: any) {
+  try {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ ok: false, error: 'Method not allowed' });
+    }
+
+    const { token, sessionCode, sessionId, teamName, teamNum } = parseBody(req.body);
 
   if (!token) {
     return res.status(401).json({ ok: false, error: 'Authentication token required' });
@@ -119,4 +131,8 @@ export default async function handler(req: any, res: any) {
     teamNum: claimed.team_num,
     teamName: claimed.name,
   });
+} catch (err: any) {
+  console.error('api/join error:', err);
+  return res.status(500).json({ ok: false, error: err?.message || 'Internal server error' });
+}
 }

@@ -1,4 +1,4 @@
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, loadEnv, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 
 function apiServerPlugin(): Plugin {
@@ -66,10 +66,16 @@ function apiServerPlugin(): Plugin {
   };
 }
 
-export default defineConfig({
-  plugins: [react(), apiServerPlugin()],
-  base: './',
-  test: {
-    include: ['tests/**/*.test.ts'],
-  },
-} as never);
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+  Object.assign(process.env, env);
+
+  return {
+    plugins: [react(), apiServerPlugin()],
+    base: './',
+    test: {
+      include: ['tests/**/*.test.ts'],
+    },
+  } as never;
+});
+

@@ -1,6 +1,18 @@
+import crypto from 'node:crypto';
 import { getAdminClient } from '../server/supabaseServer';
 import { verifyHostPasscode } from '../server/hostAuth';
 import { newTeamState } from '../shared/sim';
+
+function parseBody(body: any): any {
+  if (typeof body === 'string') {
+    try {
+      return JSON.parse(body);
+    } catch {
+      return {};
+    }
+  }
+  return body || {};
+}
 
 function generateRoomCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -12,10 +24,12 @@ function generateRoomCode(): string {
 }
 
 export default async function handler(req: any, res: any) {
-  const method = req.method?.toUpperCase() ?? 'GET';
+  try {
+    const method = req.method?.toUpperCase() ?? 'GET';
+    const body = parseBody(req.body);
 
-  if (method === 'POST') {
-    const { passcode, token, roundTime, checkOnly } = req.body || {};
+    if (method === 'POST') {
+      const { passcode, token, roundTime, checkOnly } = body;
 
     const valid = verifyHostPasscode(passcode, process.env.HOST_PASSCODE);
     if (checkOnly) {
@@ -109,7 +123,7 @@ export default async function handler(req: any, res: any) {
 
   if (method === 'PATCH') {
     // Host activates the session (lobby → active) or pauses/resumes
-    const { token, sessionId, action } = req.body || {};
+    const { token, sessionId, action } = body;
     if (!token || !sessionId) {
       return res.status(400).json({ ok: false, error: 'token and sessionId are required' });
     }
@@ -181,4 +195,8 @@ export default async function handler(req: any, res: any) {
   }
 
   return res.status(405).json({ ok: false, error: 'Method not allowed' });
+} catch (err: any) {
+  console.error('api/session error:', err);
+  return res.status(500).json({ ok: false, error: err?.message || 'Internal server error' });
+}
 }

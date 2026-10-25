@@ -82,6 +82,20 @@ export async function fetchOwnState(teamId: string): Promise<{ state: TeamState;
   return data as { state: TeamState; version: number };
 }
 
+/** Safely parse JSON responses from serverless functions. Handles Vercel HTML/plain text 500 error pages gracefully. */
+async function parseJsonResponse<T = any>(res: Response): Promise<T> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    const cleanText = text.replace(/<[^>]*>/g, '').trim().slice(0, 160);
+    return {
+      ok: false,
+      error: cleanText || `Server error (HTTP ${res.status} ${res.statusText})`,
+    } as T;
+  }
+}
+
 /** Verify facilitator passcode securely against server route. */
 export async function verifyHostPasscodeServer(passcode: string): Promise<boolean> {
   if (isDemoMode()) {
@@ -93,7 +107,7 @@ export async function verifyHostPasscodeServer(passcode: string): Promise<boolea
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ passcode, checkOnly: true }),
     });
-    const data = await res.json();
+    const data = await parseJsonResponse<{ ok?: boolean; valid?: boolean }>(res);
     return Boolean(data.ok && data.valid);
   } catch {
     return false;
@@ -102,65 +116,107 @@ export async function verifyHostPasscodeServer(passcode: string): Promise<boolea
 
 /** Create a session as host. */
 export async function createSession(passcode: string, roundTime = 120): Promise<{ ok: boolean; session?: SessionInfo; teams?: any[]; error?: string }> {
-  const token = await getAccessToken();
-  const res = await fetch('/api/session', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ passcode, token, roundTime }),
-  });
-  return res.json();
+  try {
+    const token = await getAccessToken();
+    const res = await fetch('/api/session', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ passcode, token, roundTime }),
+    });
+    return await parseJsonResponse(res);
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to reach server' };
+  }
 }
 
 /** Lookup a session and its registered teams. */
 export async function fetchSession(codeOrId: string): Promise<{ ok: boolean; session?: SessionInfo; teams?: any[]; error?: string }> {
-  const isCode = codeOrId.toUpperCase().startsWith('CR-');
-  const url = isCode ? `/api/session?code=${encodeURIComponent(codeOrId)}` : `/api/session?id=${encodeURIComponent(codeOrId)}`;
-  const res = await fetch(url);
-  return res.json();
+  try {
+    const isCode = codeOrId.toUpperCase().startsWith('CR-');
+    const url = isCode ? `/api/session?code=${encodeURIComponent(codeOrId)}` : `/api/session?id=${encodeURIComponent(codeOrId)}`;
+    const res = await fetch(url);
+    return await parseJsonResponse(res);
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to fetch session' };
+  }
 }
 
 /** Host-only: activate (start), pause, or resume a session via PATCH /api/session. */
 export async function patchSession(sessionId: string, action: 'start' | 'pause' | 'resume'): Promise<{ ok: boolean; error?: string }> {
   if (isDemoMode()) return { ok: true };
-  const token = await getAccessToken();
-  const res = await fetch('/api/session', {
-    method: 'PATCH',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ token, sessionId, action }),
-  });
-  return res.json();
+  try {
+    const token = await getAccessToken();
+    const res = await fetch('/api/session', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token, sessionId, action }),
+    });
+    return await parseJsonResponse(res);
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to update session' };
+  }
 }
 
 /** Claim a team slot in a session. */
 export async function joinSession(sessionCode: string, teamName: string, teamNum?: number): Promise<JoinResult> {
-  const token = await getAccessToken();
-  const res = await fetch('/api/join', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ token, sessionCode, teamName, teamNum }),
-  });
-  return res.json();
+  try {
+    const token = await getAccessToken();
+    const res = await fetch('/api/join', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token, sessionCode, teamName, teamNum }),
+    });
+    return await parseJsonResponse<JoinResult>(res);
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to connect to session' } as JoinResult;
+  }
 }
+
+export type SendActionResult = {
+  ok: boolean;
+  status: number;
+  state?: TeamState;
+  score?: number;
+  error?: string;
+  dup?: boolean;
+};
 
 /** Send a game action to the server. Never write to the tables directly. */
-export async function sendAction(sessionId: string, teamId: string, action: Action) {
-  const token = await getAccessToken();
-  const res = await fetch('/api/action', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ token, sessionId, teamId, action }),
-  });
-  return (await res.json()) as { ok: boolean; status: number; state?: TeamState; score?: number; error?: string; dup?: boolean };
+export async function sendAction(sessionId: string, teamId: string, action: Action): Promise<SendActionResult> {
+  try {
+    const token = await getAccessToken();
+    const res = await fetch('/api/action', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token, sessionId, teamId, action }),
+    });
+    return await parseJsonResponse<SendActionResult>(res);
+  } catch (err: any) {
+    return { ok: false, status: 500, error: err?.message || 'Action dispatch error' };
+  }
 }
 
+export type PollTickResult = {
+  ok: boolean;
+  state?: TeamState;
+  version?: number;
+  score?: number;
+  session?: SessionInfo;
+  error?: string;
+};
+
 /** Background tick poll: applies due arrivals and retrieves latest state & timer. */
-export async function pollTick(sessionId: string, teamId: string) {
-  const res = await fetch('/api/tick', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ sessionId, teamId }),
-  });
-  return (await res.json()) as { ok: boolean; state?: TeamState; version?: number; score?: number; session?: SessionInfo; error?: string };
+export async function pollTick(sessionId: string, teamId: string): Promise<PollTickResult> {
+  try {
+    const res = await fetch('/api/tick', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId, teamId }),
+    });
+    return await parseJsonResponse<PollTickResult>(res);
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Tick polling error' };
+  }
 }
 
 /** Call server-side AI helper. */
@@ -171,20 +227,24 @@ export async function requestAiAnalysis(sessionId: string, teamId: string, state
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ token, sessionId, teamId, state, prompt }),
   });
-  const data = await res.json();
+  const data = await parseJsonResponse(res);
   if (!data.ok || !data.rec) throw new Error(data.error ?? 'AI request failed');
   return data.rec;
 }
 
 /** Host dashboard data fetch. */
 export async function fetchHostTeams(sessionId: string) {
-  const token = await getAccessToken();
-  const res = await fetch('/api/host-teams', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ token, sessionId }),
-  });
-  return res.json();
+  try {
+    const token = await getAccessToken();
+    const res = await fetch('/api/host-teams', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token, sessionId }),
+    });
+    return await parseJsonResponse(res);
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to fetch host teams' };
+  }
 }
 
 /** Live leaderboard updates. The server broadcasts after every saved action. Returns an unsubscribe function. */

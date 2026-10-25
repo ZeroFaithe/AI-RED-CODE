@@ -1,13 +1,25 @@
 import { getAdminClient, createSupabaseServerDeps } from '../server/supabaseServer';
 import { handleAuthoritativeAction, type ActionRequest } from '../server/actionHandler';
 
-export default async function handler(req: any, res: any) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ ok: false, error: 'Method not allowed' });
+function parseBody(body: any): any {
+  if (typeof body === 'string') {
+    try {
+      return JSON.parse(body);
+    } catch {
+      return {};
+    }
   }
+  return body || {};
+}
 
-  const body = (req.body || {}) as ActionRequest;
-  const { token, sessionId, teamId, action } = body;
+export default async function handler(req: any, res: any) {
+  try {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ ok: false, error: 'Method not allowed' });
+    }
+
+    const body = parseBody(req.body) as ActionRequest;
+    const { token, sessionId, teamId, action } = body;
 
   if (!token || !sessionId || !teamId || !action) {
     return res.status(400).json({ ok: false, error: 'Missing token, sessionId, teamId, or action' });
@@ -53,4 +65,8 @@ export default async function handler(req: any, res: any) {
   }
 
   return res.status(out.status).json(out);
+} catch (err: any) {
+  console.error('api/action error:', err);
+  return res.status(500).json({ ok: false, status: 500, error: err?.message || 'Internal server error' });
+}
 }
